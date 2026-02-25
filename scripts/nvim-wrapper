@@ -1,0 +1,3 @@
+#!/bin/sh
+# Wrapper to ensure site/parser is in runtimepath for tree-sitter
+exec /usr/bin/nvim --cmd "set runtimepath^=/home/opencode/.local/share/nvim/site" "$@"

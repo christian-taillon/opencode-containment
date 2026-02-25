@@ -35,7 +35,9 @@ RUN apk add --no-cache \
     build-base \
     openssl-dev \
     ripgrep \
-    fd
+    fd \
+    gcompat \
+    libc6-compat
 
 # Install uv (Python package manager)
 RUN curl -LsSf https://astral.sh/uv/install.sh | sh
@@ -57,3 +59,7 @@ RUN ARCH="$(uname -m)" && \
     curl -fsSL "https://github.com/artempyanykh/marksman/releases/latest/download/marksman-${MARKSMAN_ARCH}" \
         -o /usr/local/bin/marksman && \
     chmod +x /usr/local/bin/marksman
+
+# Install nvim wrapper to ensure runtimepath is set correctly
+COPY scripts/nvim-wrapper /usr/local/bin/nvim
+RUN chmod +x /usr/local/bin/nvim
