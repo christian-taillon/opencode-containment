@@ -3,10 +3,10 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
-# Default values
-PROFILE="secure"
-IMAGE="opencode-containment:latest"
-WORKSPACE="$PWD"
+# Default values (env-overridable)
+PROFILE="${OPENCODE_PROFILE:-secure}"
+IMAGE="${OPENCODE_IMAGE:-opencode-containment:latest}"
+WORKSPACE="${OPENCODE_WORKSPACE:-$PWD}"
 OPENCODE_CONTAINER_HOME="${OPENCODE_CONTAINER_HOME:-$HOME/.local/share/opencode-container}"
 
 show_help() {
@@ -14,9 +14,9 @@ show_help() {
 Usage: opencode-container [OPTIONS] [-- ARGS...]
 
 Options:
-  --profile PROFILE   Profile to use: secure or native (default: secure)
-  --image IMAGE       Container image to use (default: opencode-containment:latest)
-  --workspace DIR     Workspace directory to mount (default: current directory)
+  --profile PROFILE   Profile to use: secure or native (default: OPENCODE_PROFILE or secure)
+  --image IMAGE       Container image to use (default: OPENCODE_IMAGE or opencode-containment:latest)
+  --workspace DIR     Workspace directory to mount (default: OPENCODE_WORKSPACE or current directory)
   --help              Show this help message
 
 Profiles:
@@ -147,6 +147,9 @@ if [[ "$PROFILE" == "native" ]]; then
     fi
     if [[ -d "$HOME/.local/state/nvim" ]]; then
         DOCKER_ARGS+=(--volume "$HOME/.local/state/nvim:/home/opencode/.local/state/nvim:rw")
+    fi
+    if [[ -d "$HOME/.cache/nvim" ]]; then
+        DOCKER_ARGS+=(--volume "$HOME/.cache/nvim:/home/opencode/.cache/nvim:rw")
     fi
     
     # Sanitized zshrc

@@ -1,4 +1,4 @@
-.PHONY: help build setup run run-native doctor clean shell-install
+.PHONY: help build setup run run-native run-secure doctor clean shell-install
 
 # Project variables
 PROJECT_NAME := opencode-containment
@@ -17,10 +17,13 @@ build: ## Build the Docker image as opencode-containment:latest
 setup: ## Run scripts/generate-container-zshrc.sh + create persistent dirs + validate
 	@echo "Running setup..."
 	@bash scripts/generate-container-zshrc.sh
-	@mkdir -p $(OPENCODE_CONTAINER_HOME)/cache $(OPENCODE_CONTAINER_HOME)/state
+	@mkdir -p $(OPENCODE_CONTAINER_HOME)/cache $(OPENCODE_CONTAINER_HOME)/local
 	@echo "Setup complete."
 
-run: ## Run container with secure profile
+run: ## Run container with native profile (best UX)
+	@bash bin/opencode-container --profile native
+
+run-secure: ## Run container with secure profile
 	@bash bin/opencode-container --profile secure
 
 run-native: ## Run with native profile

@@ -37,8 +37,8 @@ This project provides a secure, containerized environment for running OpenCode (
    ```
 5. Run the container:
    ```bash
-   make run
-   # or directly: bin/opencode-container
+    make run
+    # or directly: bin/opencode-container --profile native
    ```
 
 ## Profiles
@@ -50,7 +50,7 @@ The environment supports two profiles to balance security and convenience:
 | Workspace Mount | Read-Write | Read-Write |
 | SSH Agent Socket | Forwarded | Forwarded |
 | Host Configs | Git, SSH Config (Read-Only) | Read-Only (git, ssh config) |
-| Editor Config | None | Read-Only (vim/nvim) |
+| Editor Config | None | Read-Only config/plugins + RW state/cache |
 | Shell Config | Default | Sanitized Host Config |
 
 ## Security Model
@@ -94,7 +94,8 @@ Container configuration overrides (like disabling specific agent delegations) ar
 - `make build`: Build the Docker image
 - `make setup`: Create necessary directories and generate sanitized zshrc
 - `make doctor`: Verify prerequisites and setup
-- `make run`: Run the container interactively
+- `make run`: Run the container interactively (native profile)
+- `make run-secure`: Run the container with the secure profile
 - `make shell-install`: Install the `opencode` command globally in your shell
 - `make clean`: Remove generated files and persistent state
 
