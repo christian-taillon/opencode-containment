@@ -139,12 +139,14 @@ fi
 
 # Native profile mounts
 if [[ "$PROFILE" == "native" ]]; then
+    mkdir -p "$OPENCODE_CONTAINER_HOME/local/share/nvim/site/parser"
     if [[ -d "$HOME/.config/nvim" ]]; then
         DOCKER_ARGS+=(--volume "$HOME/.config/nvim:/home/opencode/.config/nvim:ro")
     fi
     if [[ -d "$HOME/.local/share/nvim" ]]; then
         DOCKER_ARGS+=(--volume "$HOME/.local/share/nvim:/home/opencode/.local/share/nvim:ro")
     fi
+    DOCKER_ARGS+=(--volume "$OPENCODE_CONTAINER_HOME/local/share/nvim/site/parser:/home/opencode/.local/share/nvim/site/parser:rw")
     if [[ -d "$HOME/.local/state/nvim" ]]; then
         DOCKER_ARGS+=(--volume "$HOME/.local/state/nvim:/home/opencode/.local/state/nvim:rw")
     fi
@@ -157,10 +159,22 @@ if [[ "$PROFILE" == "native" ]]; then
     if [[ -f "$ZSHRC_LOCAL" ]]; then
         DOCKER_ARGS+=(--volume "$ZSHRC_LOCAL:/home/opencode/.zshrc:ro")
     fi
+    
+    # Container init script for parser compilation
+    DOCKER_ARGS+=(--volume "$SCRIPT_DIR/scripts/container-init.sh:/usr/local/bin/container-init.sh:ro")
 elif [[ "$PROFILE" != "secure" ]]; then
     echo "Error: Unknown profile '$PROFILE'. Use 'secure' or 'native'." >&2
     exit 1
 fi
 
 # Execute docker run
-exec docker run "${DOCKER_ARGS[@]}" "$IMAGE" "${ARGS[@]}"
+if [[ "$PROFILE" == "native" ]]; then
+    # Native profile: run init script first (compiles tree-sitter parsers if needed)
+    if [[ ${#ARGS[@]} -eq 0 ]]; then
+        exec docker run "${DOCKER_ARGS[@]}" --entrypoint /usr/local/bin/container-init.sh "$IMAGE" opencode
+    else
+        exec docker run "${DOCKER_ARGS[@]}" --entrypoint /usr/local/bin/container-init.sh "$IMAGE" "${ARGS[@]}"
+    fi
+else
+    exec docker run "${DOCKER_ARGS[@]}" "$IMAGE" "${ARGS[@]}"
+fi
