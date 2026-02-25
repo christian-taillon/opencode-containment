@@ -1,0 +1,14 @@
+{
+  "agent": {
+    "auto-gemini-cli": {
+      "disable": true
+    },
+    "auto-plan": {
+      "permission": {
+        "task": {
+          "auto-gemini-cli": "deny"
+        }
+      }
+    }
+  }
+}
