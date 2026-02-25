@@ -46,3 +46,14 @@ RUN curl https://sh.rustup.rs -sSf | sh -s -- -y --profile minimal --default-too
     && rustc --version \
     && cargo --version \
     && uv --version
+
+# Install marksman (Markdown LSP server) — used by LazyVim for Markdown files
+RUN ARCH="$(uname -m)" && \
+    case "$ARCH" in \
+        x86_64)  MARKSMAN_ARCH="linux-x64" ;; \
+        aarch64) MARKSMAN_ARCH="linux-arm64" ;; \
+        *)       echo "Unsupported arch: $ARCH"; exit 1 ;; \
+    esac && \
+    curl -fsSL "https://github.com/artempyanykh/marksman/releases/latest/download/marksman-${MARKSMAN_ARCH}" \
+        -o /usr/local/bin/marksman && \
+    chmod +x /usr/local/bin/marksman

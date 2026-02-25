@@ -140,6 +140,7 @@ fi
 # Native profile mounts
 if [[ "$PROFILE" == "native" ]]; then
     mkdir -p "$OPENCODE_CONTAINER_HOME/local/share/nvim/site/parser"
+    mkdir -p "$OPENCODE_CONTAINER_HOME/local/share/nvim/lazy/nvim-treesitter/parser"
     if [[ -d "$HOME/.config/nvim" ]]; then
         DOCKER_ARGS+=(--volume "$HOME/.config/nvim:/home/opencode/.config/nvim:ro")
     fi
@@ -147,6 +148,8 @@ if [[ "$PROFILE" == "native" ]]; then
         DOCKER_ARGS+=(--volume "$HOME/.local/share/nvim:/home/opencode/.local/share/nvim:ro")
     fi
     DOCKER_ARGS+=(--volume "$OPENCODE_CONTAINER_HOME/local/share/nvim/site/parser:/home/opencode/.local/share/nvim/site/parser:rw")
+    # Writable overlay for nvim-treesitter plugin parser directory
+    DOCKER_ARGS+=(--volume "$OPENCODE_CONTAINER_HOME/local/share/nvim/lazy/nvim-treesitter/parser:/home/opencode/.local/share/nvim/lazy/nvim-treesitter/parser:rw")
     if [[ -d "$HOME/.local/state/nvim" ]]; then
         DOCKER_ARGS+=(--volume "$HOME/.local/state/nvim:/home/opencode/.local/state/nvim:rw")
     fi
