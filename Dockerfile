@@ -1,6 +1,6 @@
 # syntax=docker/dockerfile:1
 
-# Base image
+# Base image: Alpine Linux-based OpenCode
 FROM ghcr.io/anomalyco/opencode
 
 USER root
@@ -14,33 +14,31 @@ LABEL org.opencontainers.image.source="https://github.com/christian-taillon/open
 ARG RUST_TOOLCHAIN=stable
 
 # Environment variables
-ENV DEBIAN_FRONTEND=noninteractive
 ENV UV_INSTALL_DIR=/usr/local/bin
 ENV RUSTUP_HOME=/usr/local/rustup
 ENV CARGO_HOME=/usr/local/cargo
 ENV PATH=/usr/local/cargo/bin:/usr/local/bin:${PATH}
 
-# Install system dependencies
-RUN apt-get update && apt-get install -y --no-install-recommends \
+# Install system dependencies (Alpine)
+RUN apk add --no-cache \
+    bash \
     ca-certificates \
     curl \
     git \
     neovim \
     python3 \
-    python3-pip \
-    python3-venv \
+    py3-pip \
+    py3-virtualenv \
     make \
     jq \
-    pkg-config \
-    build-essential \
-    libssl-dev \
+    pkgconf \
+    build-base \
+    openssl-dev \
     ripgrep \
-    fd-find \
-    && rm -rf /var/lib/apt/lists/*
+    fd
 
-# Install uv
-RUN curl -LsSf https://astral.sh/uv/install.sh | sh \
-    && chmod 755 /usr/local/bin/uv /usr/local/bin/uvx
+# Install uv (Python package manager)
+RUN curl -LsSf https://astral.sh/uv/install.sh | sh
 
 # Install Rust and Cargo
 RUN curl https://sh.rustup.rs -sSf | sh -s -- -y --profile minimal --default-toolchain "${RUST_TOOLCHAIN}" \
