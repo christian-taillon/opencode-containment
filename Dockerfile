@@ -8,7 +8,7 @@ USER root
 # OCI Labels
 LABEL org.opencontainers.image.title="opencode-containment"
 LABEL org.opencontainers.image.description="Secure, native-feeling containerized development environment for OpenCode"
-LABEL org.opencontainers.image.source="https://github.com/anomalyco/opencode-containment"
+LABEL org.opencontainers.image.source="https://github.com/christian-taillon/opencode-containment"
 
 # Build arguments
 ARG RUST_TOOLCHAIN=stable

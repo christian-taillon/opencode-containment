@@ -20,7 +20,7 @@ This project provides a secure, containerized environment for running OpenCode (
 
 1. Clone the repository:
    ```bash
-   git clone https://github.com/anomalyco/opencode-containment.git
+   git clone https://github.com/christian-taillon/opencode-containment.git
    cd opencode-containment
    ```
 2. Build the container image:
