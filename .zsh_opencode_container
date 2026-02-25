@@ -38,10 +38,6 @@ container-opencode() {
     extra_mounts+=( -v "$HOME/.local/share/nvim:$home_in_container/.local/share/nvim:ro" )
   fi
 
-  if [ -d "$HOME/.local/state/nvim" ]; then
-    extra_mounts+=( -v "$HOME/.local/state/nvim:$home_in_container/.local/state/nvim:rw" )
-  fi
-
   if [ -f "$script_dir/.zshrc.local" ]; then
     extra_mounts+=( -v "$script_dir/.zshrc.local:$home_in_container/.zshrc:ro" )
   fi

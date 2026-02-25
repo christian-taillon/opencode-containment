@@ -97,7 +97,7 @@ fi
 if [[ -n "${SSH_AUTH_SOCK:-}" && -S "$SSH_AUTH_SOCK" ]]; then
     DOCKER_ARGS+=(
         --env SSH_AUTH_SOCK=/tmp/ssh-agent.sock
-        --volume "$SSH_AUTH_SOCK:/tmp/ssh-agent.sock:ro"
+        --volume "$SSH_AUTH_SOCK:/tmp/ssh-agent.sock"
     )
 fi
 
@@ -152,12 +152,11 @@ if [[ "$PROFILE" == "native" ]]; then
     DOCKER_ARGS+=(--volume "$OPENCODE_CONTAINER_HOME/local/share/nvim/lazy/blink.cmp/target:/home/opencode/.local/share/nvim/lazy/blink.cmp/target:rw")
     
     DOCKER_ARGS+=(--volume "$OPENCODE_CONTAINER_HOME/local/share/nvim/site/parser:/home/opencode/.local/share/nvim/site/parser:rw")
-    if [[ -d "$HOME/.local/state/nvim" ]]; then
-        DOCKER_ARGS+=(--volume "$HOME/.local/state/nvim:/home/opencode/.local/state/nvim:rw")
-    fi
-    if [[ -d "$HOME/.cache/nvim" ]]; then
-        DOCKER_ARGS+=(--volume "$HOME/.cache/nvim:/home/opencode/.cache/nvim:rw")
-    fi
+    # Use isolated persistent state/cache for nvim — do NOT mount from host to prevent
+    # Alpine container neovim from corrupting the host's nvim state or cache directories.
+    mkdir -p "$OPENCODE_CONTAINER_HOME/local/state/nvim" "$OPENCODE_CONTAINER_HOME/cache/nvim"
+    DOCKER_ARGS+=(--volume "$OPENCODE_CONTAINER_HOME/local/state/nvim:/home/opencode/.local/state/nvim:rw")
+    DOCKER_ARGS+=(--volume "$OPENCODE_CONTAINER_HOME/cache/nvim:/home/opencode/.cache/nvim:rw")
     
     # Sanitized zshrc
     ZSHRC_LOCAL="$SCRIPT_DIR/.zshrc.local"
