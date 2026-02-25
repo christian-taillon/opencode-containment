@@ -17,7 +17,7 @@ build: ## Build the Docker image as opencode-containment:latest
 setup: ## Run scripts/generate-container-zshrc.sh + create persistent dirs + validate
 	@echo "Running setup..."
 	@bash scripts/generate-container-zshrc.sh
-	@mkdir -p $(OPENCODE_CONTAINER_HOME)/cache $(OPENCODE_CONTAINER_HOME)/local $(OPENCODE_CONTAINER_HOME)/local/share/nvim/site/parser $(OPENCODE_CONTAINER_HOME)/local/share/nvim/lazy/nvim-treesitter/parser
+	@mkdir -p $(OPENCODE_CONTAINER_HOME)/cache $(OPENCODE_CONTAINER_HOME)/local $(OPENCODE_CONTAINER_HOME)/local/share/nvim/site/parser
 	@echo "Setup complete."
 
 setup-parsers: ## Pre-compile tree-sitter parsers inside the container (requires native profile)
