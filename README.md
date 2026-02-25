@@ -11,6 +11,7 @@ This project provides a secure, containerized environment for running OpenCode (
 - Extends `ghcr.io/anomalyco/opencode` with essential development tools (git, neovim, python3, uv, rust/cargo, build-essential, ripgrep, fd-find)
 - Provides a `bin/opencode-container` CLI wrapper for secure `docker run` execution
 - Supports two profiles: `secure` (default) and `native` (adds editor and shell config)
+- Enforces read-only container root filesystem with writable mounts only where explicitly needed (`/workspace`, `.local`, `.cache`, `/tmp`)
 - Mounts workspace read-write, while keeping most host configs read-only
 - Forwards SSH agent socket without mounting private keys
 - Maintains persistent cache and state across container sessions
@@ -23,22 +24,28 @@ This project provides a secure, containerized environment for running OpenCode (
    git clone https://github.com/christian-taillon/opencode-containment.git
    cd opencode-containment
    ```
-2. Build the container image:
+2. Run the installer (recommended):
+   ```bash
+   ./install.sh
+   ```
+   This builds the image, runs setup, and checks your environment.
+
+3. (Manual path) Build the container image:
    ```bash
    make build
    ```
-3. Set up the environment:
+4. (Manual path) Set up the environment:
    ```bash
    make setup
    ```
-4. (Optional) Verify your setup:
+5. (Optional) Verify your setup:
    ```bash
    make doctor
    ```
-5. Run the container:
+6. Run the container:
    ```bash
-    make run
-    # or directly: bin/opencode-container --profile native
+     make run
+     # or directly: bin/opencode-container --profile native
    ```
 
 ## Profiles
@@ -62,6 +69,14 @@ The container is designed with security as a primary concern:
 - **SSH Agent**: Instead of mounting keys, the host's SSH agent socket is forwarded, allowing secure authentication without exposing credentials.
 - **Environment Variables**: Only an explicit allowlist of environment variables is passed to the container.
 - **Hardening**: The container drops unnecessary capabilities (`cap-drop=ALL`), prevents privilege escalation (`no-new-privileges`), and maps the container user to the host user to maintain correct file ownership.
+- **Filesystem Containment**: Container root is read-only (`--read-only`) with explicit writable overlays only for `/workspace`, `/tmp`, and isolated persistent cache/state.
+- **Workspace Guardrails**: The launcher rejects unsafe workspace mounts (`/`, `$HOME`, or paths outside the starting directory tree).
+
+## Command Choices
+
+- `make run`: Starts the native profile for daily use (better editor/shell UX)
+- `make run-secure`: Starts the secure profile with minimal integration
+- `make shell-install`: Installs `opencode-container` symlink to `~/.local/bin` for convenience
 
 ## Architecture
 
