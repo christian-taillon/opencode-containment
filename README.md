@@ -113,6 +113,10 @@ To add new packages or tools to the environment, modify the `Dockerfile` and reb
 
 Contributions are welcome! Please ensure that any changes maintain the security model and do not introduce unnecessary privileges or mounts.
 
+## Migration and Handoff
+
+For current migration progress, validation checklist, and host-to-host handoff notes, see `docs/migration-status.md`.
+
 ## License
 
 This project is licensed under the MIT License. See the [LICENSE](LICENSE) file for details.
