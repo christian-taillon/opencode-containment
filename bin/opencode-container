@@ -194,12 +194,9 @@ elif [[ "$PROFILE" != "secure" ]]; then
     exit 1
 fi
 
-# Unconditionally mount and use the init script as entrypoint to enforce containment policy
-DOCKER_ARGS+=(--volume "$SCRIPT_DIR/scripts/container-init.sh:/usr/local/bin/container-init.sh:ro")
-
 # Execute docker run
 if [[ ${#ARGS[@]} -eq 0 ]]; then
-    exec docker run "${DOCKER_ARGS[@]}" --entrypoint /usr/local/bin/container-init.sh "$IMAGE" opencode
-else
-    exec docker run "${DOCKER_ARGS[@]}" --entrypoint /usr/local/bin/container-init.sh "$IMAGE" "${ARGS[@]}"
+    ARGS=(opencode)
 fi
+
+exec docker run "${DOCKER_ARGS[@]}" "$IMAGE" "${ARGS[@]}"
