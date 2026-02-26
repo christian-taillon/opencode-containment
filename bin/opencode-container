@@ -57,6 +57,27 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
+# Validate workspace to prevent host OS breakage
+if [[ ! -e "$WORKSPACE" ]]; then
+    echo "Error: Workspace path does not exist: $WORKSPACE" >&2
+    exit 1
+fi
+if [[ ! -d "$WORKSPACE" ]]; then
+    echo "Error: Workspace path is not a directory: $WORKSPACE" >&2
+    exit 1
+fi
+REAL_WORKSPACE="$(realpath "$WORKSPACE")"
+REAL_HOME="$(realpath "$HOME")"
+START_DIR="$(realpath "$PWD")"
+if [[ "$REAL_WORKSPACE" == "/" || "$REAL_WORKSPACE" == "$REAL_HOME" ]]; then
+    echo "Error: For security reasons, mounting '/' or '$HOME' as the workspace is not allowed." >&2
+    exit 1
+fi
+if [[ "$REAL_WORKSPACE" != "$START_DIR" && "$REAL_WORKSPACE" != "$START_DIR"/* ]]; then
+    echo "Error: Workspace must be the current directory or one of its subdirectories." >&2
+    exit 1
+fi
+
 # Check prerequisites
 if ! command -v docker >/dev/null 2>&1; then
     echo "Error: docker is not installed or not in PATH." >&2
@@ -72,8 +93,11 @@ DOCKER_ARGS=(
     -it
     --cap-drop=ALL
     --security-opt no-new-privileges:true
+    --read-only
+    --tmpfs /tmp:rw,nosuid,nodev,exec,size=256m
     --init
     --user "$(id -u):$(id -g)"
+    --env "OPENCODE_PROFILE=$PROFILE"
     --env HOME=/home/opencode
     --env EDITOR=nvim
     --env VISUAL=nvim
@@ -159,27 +183,29 @@ if [[ "$PROFILE" == "native" ]]; then
         DOCKER_ARGS+=(--volume "$HOME/.cache/nvim:/home/opencode/.cache/nvim:rw")
     fi
     
-    # Sanitized zshrc
-    ZSHRC_LOCAL="$SCRIPT_DIR/.zshrc.local"
-    if [[ -f "$ZSHRC_LOCAL" ]]; then
-        DOCKER_ARGS+=(--volume "$ZSHRC_LOCAL:/home/opencode/.zshrc:ro")
+    # Sanitized zshrc generated in persistent container state
+    HOST_ZSHRC="$HOME/.zshrc"
+    SANITIZED_ZSHRC="$OPENCODE_CONTAINER_HOME/local/share/opencode/zshrc_sanitized"
+    if [[ -f "$HOST_ZSHRC" ]]; then
+        mkdir -p "$(dirname "$SANITIZED_ZSHRC")"
+        if [[ ! -f "$SANITIZED_ZSHRC" || "$HOST_ZSHRC" -nt "$SANITIZED_ZSHRC" ]]; then
+            if ! bash "$SCRIPT_DIR/scripts/generate-container-zshrc.sh" "$HOST_ZSHRC" "$SANITIZED_ZSHRC"; then
+                echo "Warning: failed to regenerate sanitized zshrc; continuing without host zshrc." >&2
+            fi
+        fi
+    fi
+    if [[ -f "$SANITIZED_ZSHRC" ]]; then
+        DOCKER_ARGS+=(--volume "$SANITIZED_ZSHRC:/home/opencode/.zshrc:ro")
     fi
     
-    # Container init script for parser compilation
-    DOCKER_ARGS+=(--volume "$SCRIPT_DIR/scripts/container-init.sh:/usr/local/bin/container-init.sh:ro")
 elif [[ "$PROFILE" != "secure" ]]; then
     echo "Error: Unknown profile '$PROFILE'. Use 'secure' or 'native'." >&2
     exit 1
 fi
 
 # Execute docker run
-if [[ "$PROFILE" == "native" ]]; then
-    # Native profile: run init script first (compiles tree-sitter parsers if needed)
-    if [[ ${#ARGS[@]} -eq 0 ]]; then
-        exec docker run "${DOCKER_ARGS[@]}" --entrypoint /usr/local/bin/container-init.sh "$IMAGE" opencode
-    else
-        exec docker run "${DOCKER_ARGS[@]}" --entrypoint /usr/local/bin/container-init.sh "$IMAGE" "${ARGS[@]}"
-    fi
-else
-    exec docker run "${DOCKER_ARGS[@]}" "$IMAGE" "${ARGS[@]}"
+if [[ ${#ARGS[@]} -eq 0 ]]; then
+    ARGS=(opencode)
 fi
+
+exec docker run "${DOCKER_ARGS[@]}" "$IMAGE" "${ARGS[@]}"

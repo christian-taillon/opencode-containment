@@ -1,20 +1,39 @@
 # opencode-containment
 
-A secure, native-feeling containerized development environment for OpenCode.
+A simple, highly configurable, native-feeling containment starter for OpenCode.
 
 ## Overview
 
-This project provides a secure, containerized environment for running OpenCode (an AI coding assistant) directly in your terminal. It wraps a Docker container with security hardening, ensuring that the AI assistant has access to the tools it needs while protecting your host system from unintended modifications.
+Run OpenCode from SSH + tmux + neovim with a native workflow, while keeping strong host safety defaults. This project is intentionally small and easy to adapt.
+
+## Why
+
+- I run agentic work from a NUC over SSH, living in tmux and neovim where fast terminal workflows matter.
+- Many agent projects skip practical containment, even as prompt injection and tool-chain poisoning threats keep growing.
+- This aims to be an easy on-ramp: native feel first, with clear options to lock down harder.
+- It is a starting guide, not a final platform. Fork it, tune it, and make it your own.
+
+## Scope
+
+- Built for OpenCode today.
+- Easy to adapt for other agent CLIs (Claude Code, Codex, Gemini, and similar tools) with small launcher/image changes.
+- Keep the core idea: native terminal UX, clear boundaries, and configurable hardening.
 
 ## Features
 
-- Extends `ghcr.io/anomalyco/opencode` with essential development tools (git, neovim, python3, uv, rust/cargo, build-essential, ripgrep, fd-find)
-- Provides a `bin/opencode-container` CLI wrapper for secure `docker run` execution
-- Supports two profiles: `secure` (default) and `native` (adds editor and shell config)
-- Mounts workspace read-write, while keeping most host configs read-only
-- Forwards SSH agent socket without mounting private keys
-- Maintains persistent cache and state across container sessions
-- Generates sanitized zshrc to strip secret-loading lines from host config
+- Native CLI workflow over SSH/tmux/neovim
+- Two profiles: `secure` (default) and `native`
+- Read-only container root with explicit writable paths only
+- Workspace guardrails to block unsafe mounts
+- Read-only host config mounts + SSH agent forwarding (no key mounts)
+- Persistent isolated state for cache/local tooling
+- Simple launcher script with env-based configuration overrides
+
+## Editor Workflow
+
+- The workspace is bind-mounted from your host, so container file changes are visible immediately from host editors.
+- You can keep using VS Code, neovim, or any local editor without putting that editor inside the container.
+- This keeps container complexity low while preserving a native editing loop.
 
 ## Quick Start
 
@@ -23,22 +42,28 @@ This project provides a secure, containerized environment for running OpenCode (
    git clone https://github.com/christian-taillon/opencode-containment.git
    cd opencode-containment
    ```
-2. Build the container image:
+2. Run the installer (recommended):
+   ```bash
+   ./install.sh
+   ```
+   This builds the image, runs setup, and checks your environment.
+
+3. (Manual path) Build the container image:
    ```bash
    make build
    ```
-3. Set up the environment:
+4. (Manual path) Set up the environment:
    ```bash
    make setup
    ```
-4. (Optional) Verify your setup:
+5. (Optional) Verify your setup:
    ```bash
    make doctor
    ```
-5. Run the container:
+6. Run the container:
    ```bash
-    make run
-    # or directly: bin/opencode-container --profile native
+     make run
+     # or directly: bin/opencode-container --profile native
    ```
 
 ## Profiles
@@ -61,7 +86,15 @@ The container is designed with security as a primary concern:
 - **Excluded Mounts**: Private SSH keys and sensitive environment files are intentionally NOT mounted.
 - **SSH Agent**: Instead of mounting keys, the host's SSH agent socket is forwarded, allowing secure authentication without exposing credentials.
 - **Environment Variables**: Only an explicit allowlist of environment variables is passed to the container.
-- **Hardening**: The container drops unnecessary capabilities (`cap-drop=ALL`), prevents privilege escalation (`no-new-privileges`), and maps the container user to the host user to maintain correct file ownership.
+- **Hardening**: The container drops unnecessary capabilities (`cap-drop=ALL`), prevents privilege escalation (`no-new-privileges`), maps the container user to the host user to maintain correct file ownership, and uses an image-level startup entrypoint for consistent policy enforcement.
+- **Filesystem Containment**: Container root is read-only (`--read-only`) with explicit writable overlays only for `/workspace`, `/tmp`, and isolated persistent cache/state.
+- **Workspace Guardrails**: The launcher rejects unsafe workspace mounts (`/`, `$HOME`, or paths outside the starting directory tree).
+
+## Command Choices
+
+- `make run`: Starts the native profile for daily use (better editor/shell UX)
+- `make run-secure`: Starts the secure profile with minimal integration
+- `make shell-install`: Installs `opencode-container` symlink to `~/.local/bin` for convenience
 
 ## Architecture
 
@@ -92,7 +125,7 @@ Container configuration overrides (like disabling specific agent delegations) ar
 ## Makefile Targets
 
 - `make build`: Build the Docker image
-- `make setup`: Create necessary directories and generate sanitized zshrc
+- `make setup`: Create necessary persistent directories
 - `make doctor`: Verify prerequisites and setup
 - `make run`: Run the container interactively (native profile)
 - `make run-secure`: Run the container with the secure profile
@@ -107,11 +140,20 @@ To add new packages or tools to the environment, modify the `Dockerfile` and reb
 
 - Docker
 - bash
-- zsh (required for the `native` profile shell config generation)
+
+## Dependencies and Guidance
+
+- Core dependencies: Docker, bash, and `make` (used by setup/build helpers).
+- Optional host tools: tmux, neovim, VS Code, or any editor you prefer.
+- Start simple: run `./install.sh`, then `make run`.
+- Harden further as needed: use `make run-secure`, trim mounts, and keep host configs read-only.
+- Prefer fork-level customization over adding heavy framework logic here.
 
 ## Contributing
 
-Contributions are welcome! Please ensure that any changes maintain the security model and do not introduce unnecessary privileges or mounts.
+Contributions are welcome. Please keep changes simple, configurable, and security-conscious.
+
+Forks are encouraged - this repository is designed as a practical starting point you can tailor to your own workflow.
 
 ## Migration and Handoff
 

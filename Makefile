@@ -14,9 +14,8 @@ help: ## Show all targets with descriptions
 build: ## Build the Docker image as opencode-containment:latest
 	docker build -t $(IMAGE_NAME) .
 
-setup: ## Run scripts/generate-container-zshrc.sh + create persistent dirs + validate
+setup: ## Create persistent directories for container cache/state
 	@echo "Running setup..."
-	@bash scripts/generate-container-zshrc.sh
 	@mkdir -p $(OPENCODE_CONTAINER_HOME)/cache $(OPENCODE_CONTAINER_HOME)/local $(OPENCODE_CONTAINER_HOME)/local/share/nvim/site/parser $(OPENCODE_CONTAINER_HOME)/local/share/nvim/lazy/blink.cmp/target
 	@echo "Setup complete."
 

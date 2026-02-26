@@ -63,3 +63,9 @@ RUN ARCH="$(uname -m)" && \
 # Install nvim wrapper to ensure runtimepath is set correctly
 COPY scripts/nvim-wrapper /usr/local/bin/nvim
 RUN chmod +x /usr/local/bin/nvim
+
+# Install startup entrypoint that enforces containment behavior
+COPY scripts/container-init.sh /usr/local/bin/entrypoint.sh
+RUN chmod +x /usr/local/bin/entrypoint.sh
+
+ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]

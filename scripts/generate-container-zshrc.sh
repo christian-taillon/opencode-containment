@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 source_zshrc="${1:-$HOME/.zshrc}"
-target_zshrc="${2:-$repo_root/.zshrc.local}"
+default_home="${OPENCODE_CONTAINER_HOME:-$HOME/.local/share/opencode-container}"
+target_zshrc="${2:-$default_home/local/share/opencode/zshrc_sanitized}"
 tmp_file="${target_zshrc}.tmp"
 
 if [[ ! -f "$source_zshrc" ]]; then
