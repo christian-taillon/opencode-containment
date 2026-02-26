@@ -1,0 +1,20 @@
+#!/usr/bin/env bash
+# Local-only launcher hook.
+#
+# Copy to `config/opencode-container.local.sh` and customize.
+# This file is intentionally gitignored.
+
+# Example: sync host auth into container persistent state.
+# if [[ -f "$HOME/.local/share/opencode/auth.json" ]]; then
+#   mkdir -p "$OPENCODE_CONTAINER_HOME/local/share/opencode"
+#   cp "$HOME/.local/share/opencode/auth.json" "$OPENCODE_CONTAINER_HOME/local/share/opencode/auth.json"
+# fi
+
+# Example: pass through personal credentials only when you choose.
+# [[ -n "${tc_accessid:-}" ]] && DOCKER_ARGS+=(--env "tc_accessid=$tc_accessid")
+# [[ -n "${tc_secretkey:-}" ]] && DOCKER_ARGS+=(--env "tc_secretkey=$tc_secretkey")
+
+# Example: mount a personal provider config read-only.
+# if [[ -d "$HOME/.config/gcloud" ]]; then
+#   DOCKER_ARGS+=(--volume "$HOME/.config/gcloud:/home/opencode/.config/gcloud:ro")
+# fi

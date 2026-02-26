@@ -27,7 +27,7 @@ Run OpenCode from SSH + tmux + neovim with a native workflow, while keeping stro
 - Workspace guardrails to block unsafe mounts
 - Read-only host config mounts + SSH agent forwarding (no key mounts)
 - Persistent isolated state for cache/local tooling
-- Simple launcher script with env-based configuration overrides
+- Clean baseline launcher with optional local-only overrides
 
 ## Editor Workflow
 
@@ -114,13 +114,22 @@ You can customize the environment using environment variables:
 - `OPENCODE_PROFILE`: Set to `native` to use the native profile (default is `secure`).
 - `OPENCODE_IMAGE`: Override the default Docker image.
 - `OPENCODE_WORKSPACE`: Override the workspace directory to mount.
+- `OPENCODE_OVERRIDES_FILE`: Optional JSON file to pass as `OPENCODE_CONFIG_CONTENT`.
+
+For local customization, generate gitignored override files:
+
+```bash
+scripts/init-local-overrides.sh
+```
+
+This creates local templates you can edit without committing personal/provider-specific settings.
 
 To install the `opencode` command globally in your shell, run:
 ```bash
 make shell-install
 ```
 
-Container configuration overrides (like disabling specific agent delegations) are managed in `config/opencode-overrides.json`.
+See `docs/local-overrides.md` for local override layering and examples.
 
 ## Makefile Targets
 
@@ -129,6 +138,7 @@ Container configuration overrides (like disabling specific agent delegations) ar
 - `make doctor`: Verify prerequisites and setup
 - `make run`: Run the container interactively (native profile)
 - `make run-secure`: Run the container with the secure profile
+- `make init-local-overrides`: Generate local gitignored override files
 - `make shell-install`: Install the `opencode` command globally in your shell
 - `make clean`: Remove generated files and persistent state
 

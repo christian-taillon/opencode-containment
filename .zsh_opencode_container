@@ -1,78 +1,13 @@
 container-opencode() {
-  local script_dir home_in_container persist_root local_dir cache_dir opencode_image ssh_auth_sock_container rc
-  local opencode_container_override
-  local -a extra_mounts
-
+  local script_dir local_override
   script_dir="${${(%):-%N}:A:h}"
-  home_in_container="/home/opencode"
-  persist_root="${OPENCODE_CONTAINER_HOME:-$HOME/.local/share/opencode-container}"
-  local_dir="$persist_root/.local"
-  cache_dir="$persist_root/.cache"
-  opencode_image="${OPENCODE_IMAGE:-opencode-with-git}"
-  ssh_auth_sock_container=""
+  local_override="$script_dir/.zsh_opencode_container.local"
 
-  command mkdir -p "$local_dir/share/opencode" "$cache_dir"
-
-  # Sync authentication from host to sandbox so providers are recognized.
-  if [ -f "$HOME/.local/share/opencode/auth.json" ]; then
-    command cp "$HOME/.local/share/opencode/auth.json" "$local_dir/share/opencode/auth.json"
+  if [ -f "$local_override" ]; then
+    # Keep personal tweaks in a gitignored local file.
+    # shellcheck disable=SC1090
+    source "$local_override"
   fi
 
-  # Container override: disable gemini-cli delegation paths
-  # so @auto-plan never routes to @auto-gemini-cli in container mode.
-  opencode_container_override='{"agent":{"auto-gemini-cli":{"disable":true},"auto-plan":{"permission":{"task":{"auto-gemini-cli":"deny"}}}}}'
-
-  if [ -d "$HOME/.config/gcloud" ]; then
-    extra_mounts+=( -v "$HOME/.config/gcloud:$home_in_container/.config/gcloud:ro" )
-  fi
-
-  if [ -f "$HOME/.gitconfig" ]; then
-    extra_mounts+=( -v "$HOME/.gitconfig:$home_in_container/.gitconfig:ro" )
-  fi
-
-  if [ -d "$HOME/.config/nvim" ]; then
-    extra_mounts+=( -v "$HOME/.config/nvim:$home_in_container/.config/nvim:ro" )
-  fi
-
-  if [ -d "$HOME/.local/share/nvim" ]; then
-    extra_mounts+=( -v "$HOME/.local/share/nvim:$home_in_container/.local/share/nvim:ro" )
-  fi
-
-  if [ -d "$HOME/.local/state/nvim" ]; then
-    extra_mounts+=( -v "$HOME/.local/state/nvim:$home_in_container/.local/state/nvim:rw" )
-  fi
-
-  if [ -f "$script_dir/.zshrc.local" ]; then
-    extra_mounts+=( -v "$script_dir/.zshrc.local:$home_in_container/.zshrc:ro" )
-  fi
-
-  if [ -n "$SSH_AUTH_SOCK" ] && [ -S "$SSH_AUTH_SOCK" ]; then
-    extra_mounts+=( -v "$SSH_AUTH_SOCK:/ssh-agent" )
-    ssh_auth_sock_container="/ssh-agent"
-  fi
-
-  docker run -it --rm \
-    --user $(id -u):$(id -g) \
-    --init \
-    --security-opt no-new-privileges:true \
-    --cap-drop=ALL \
-    -e HOME="$home_in_container" \
-    -e XDG_CACHE_HOME="$home_in_container/.cache" \
-    -e EDITOR="nvim" \
-    -e VISUAL="nvim" \
-    -e SSH_AUTH_SOCK="$ssh_auth_sock_container" \
-    -e TERM="xterm-256color" \
-    -e COLORTERM="truecolor" \
-    -e OPENCODE_CONFIG_CONTENT="$opencode_container_override" \
-    -e tc_accessid="$tc_accessid" \
-    -e tc_secretkey="$tc_secretkey" \
-    -v "$HOME/.config/opencode:$home_in_container/.config/opencode:ro" \
-    -v "$local_dir:$home_in_container/.local:rw" \
-    -v "$cache_dir:$home_in_container/.cache:rw" \
-    -v "$(pwd):/workspace:rw" \
-    "${extra_mounts[@]}" \
-    -w /workspace \
-    "$opencode_image" "$@"
-  rc=$?
-  return $rc
+  "$script_dir/bin/opencode-container" "$@"
 }

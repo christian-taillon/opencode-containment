@@ -16,7 +16,11 @@ export RESTRICTED_WORKSPACE="/workspace"
 
 if [[ "${OPENCODE_PROFILE:-}" == "native" ]]; then
     PARSER_DIR="${HOME}/.local/share/nvim/site/parser"
-    mkdir -p "$PARSER_DIR"
+    if ! mkdir -p "$PARSER_DIR" 2>/dev/null; then
+        echo "Warning: parser directory is not writable: $PARSER_DIR" >&2
+        echo "Skipping parser bootstrap for this session." >&2
+        exec "$@"
+    fi
 
     # Essential parsers that plugins like image.nvim, render-markdown.nvim depend on
     ESSENTIAL_PARSERS=(

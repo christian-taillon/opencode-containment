@@ -1,4 +1,4 @@
-.PHONY: help build setup setup-parsers run run-native run-secure doctor clean shell-install
+.PHONY: help build setup setup-parsers run run-native run-secure doctor clean shell-install init-local-overrides
 
 # Project variables
 PROJECT_NAME := opencode-containment
@@ -42,12 +42,14 @@ doctor: ## Check prerequisites
 clean: ## Remove generated files and persistent data (with confirmation)
 	@read -p "Are you sure you want to remove generated files and persistent data? [y/N] " ans; \
 	if [ "$$ans" = "y" ] || [ "$$ans" = "Y" ]; then \
-		rm -f .zshrc.local; \
 		rm -rf $(OPENCODE_CONTAINER_HOME); \
 		echo "Cleaned up."; \
 	else \
 		echo "Aborted."; \
 	fi
+
+init-local-overrides: ## Create local gitignored override files from examples
+	@bash scripts/init-local-overrides.sh
 
 shell-install: ## Install the opencode-container command to ~/.local/bin (symlink)
 	@mkdir -p $(HOME)/.local/bin
