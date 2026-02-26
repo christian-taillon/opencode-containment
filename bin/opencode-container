@@ -162,22 +162,7 @@ if [[ "$PROFILE" == "native" ]]; then
     if [[ -d "$HOME/.config/nvim" ]]; then
         DOCKER_ARGS+=(--volume "$HOME/.config/nvim:/home/opencode/.config/nvim:ro")
     fi
-    if [[ -d "$HOME/.local/share/nvim" ]]; then
-        DOCKER_ARGS+=(--volume "$HOME/.local/share/nvim:/home/opencode/.local/share/nvim:ro")
-    fi
-    
-    # Writable overlay for blink.cmp target directory to allow recompilation
-    mkdir -p "$OPENCODE_CONTAINER_HOME/local/share/nvim/lazy/blink.cmp/target"
-    DOCKER_ARGS+=(--volume "$OPENCODE_CONTAINER_HOME/local/share/nvim/lazy/blink.cmp/target:/home/opencode/.local/share/nvim/lazy/blink.cmp/target:rw")
-    
-    DOCKER_ARGS+=(--volume "$OPENCODE_CONTAINER_HOME/local/share/nvim/site/parser:/home/opencode/.local/share/nvim/site/parser:rw")
-    if [[ -d "$HOME/.local/state/nvim" ]]; then
-        DOCKER_ARGS+=(--volume "$HOME/.local/state/nvim:/home/opencode/.local/state/nvim:rw")
-    fi
-    if [[ -d "$HOME/.cache/nvim" ]]; then
-        DOCKER_ARGS+=(--volume "$HOME/.cache/nvim:/home/opencode/.cache/nvim:rw")
-    fi
-    
+
     # Sanitized zshrc generated in persistent container state
     HOST_ZSHRC="$HOME/.zshrc"
     SANITIZED_ZSHRC="$OPENCODE_CONTAINER_HOME/local/share/opencode/zshrc_sanitized"
