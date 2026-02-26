@@ -183,10 +183,19 @@ if [[ "$PROFILE" == "native" ]]; then
         DOCKER_ARGS+=(--volume "$HOME/.cache/nvim:/home/opencode/.cache/nvim:rw")
     fi
     
-    # Sanitized zshrc
-    ZSHRC_LOCAL="$SCRIPT_DIR/.zshrc.local"
-    if [[ -f "$ZSHRC_LOCAL" ]]; then
-        DOCKER_ARGS+=(--volume "$ZSHRC_LOCAL:/home/opencode/.zshrc:ro")
+    # Sanitized zshrc generated in persistent container state
+    HOST_ZSHRC="$HOME/.zshrc"
+    SANITIZED_ZSHRC="$OPENCODE_CONTAINER_HOME/local/share/opencode/zshrc_sanitized"
+    if [[ -f "$HOST_ZSHRC" ]]; then
+        mkdir -p "$(dirname "$SANITIZED_ZSHRC")"
+        if [[ ! -f "$SANITIZED_ZSHRC" || "$HOST_ZSHRC" -nt "$SANITIZED_ZSHRC" ]]; then
+            if ! bash "$SCRIPT_DIR/scripts/generate-container-zshrc.sh" "$HOST_ZSHRC" "$SANITIZED_ZSHRC"; then
+                echo "Warning: failed to regenerate sanitized zshrc; continuing without host zshrc." >&2
+            fi
+        fi
+    fi
+    if [[ -f "$SANITIZED_ZSHRC" ]]; then
+        DOCKER_ARGS+=(--volume "$SANITIZED_ZSHRC:/home/opencode/.zshrc:ro")
     fi
     
 elif [[ "$PROFILE" != "secure" ]]; then
