@@ -1,0 +1,14 @@
+# Local-only overrides for the container-opencode zsh function.
+#
+# Copy this file to `.zsh_opencode_container.local` and customize it.
+# This file is intentionally gitignored so personal settings stay local.
+
+# Example: choose a custom image or default profile.
+# export OPENCODE_IMAGE="opencode-containment:latest"
+# export OPENCODE_PROFILE="native"
+
+# Example: point to a local JSON override file.
+# export OPENCODE_OVERRIDES_FILE="$HOME/.config/opencode/opencode-overrides.local.json"
+
+# Example: pass explicit config content (takes precedence over file-based overrides).
+# export OPENCODE_CONFIG_CONTENT='{"agent":{}}'

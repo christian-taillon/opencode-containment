@@ -1,6 +1,10 @@
 # Generated files
-.zshrc.local
 *.tmp
+
+# Local-only overrides (never commit)
+.zsh_opencode_container.local
+config/opencode-overrides.local.json
+config/opencode-container.local.sh
 
 # Development artifacts
 PLAN.md
