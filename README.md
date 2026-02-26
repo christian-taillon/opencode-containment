@@ -1,21 +1,27 @@
 # opencode-containment
 
-A secure, native-feeling containerized development environment for OpenCode.
+A simple, highly configurable, native-feeling containment starter for OpenCode.
 
 ## Overview
 
-This project provides a secure, containerized environment for running OpenCode (an AI coding assistant) directly in your terminal. It wraps a Docker container with security hardening, ensuring that the AI assistant has access to the tools it needs while protecting your host system from unintended modifications.
+Run OpenCode from SSH + tmux + neovim with a native workflow, while keeping strong host safety defaults. This project is intentionally small and easy to adapt.
+
+## Why
+
+- I run agentic work from a NUC over SSH, living in tmux and neovim where fast terminal workflows matter.
+- Many agent projects skip practical containment, even as prompt injection and tool-chain poisoning threats keep growing.
+- This aims to be an easy on-ramp: native feel first, with clear options to lock down harder.
+- It is a starting guide, not a final platform. Fork it, tune it, and make it your own.
 
 ## Features
 
-- Extends `ghcr.io/anomalyco/opencode` with essential development tools (git, neovim, python3, uv, rust/cargo, build-essential, ripgrep, fd-find)
-- Provides a `bin/opencode-container` CLI wrapper for secure `docker run` execution
-- Supports two profiles: `secure` (default) and `native` (adds editor and shell config)
-- Enforces read-only container root filesystem with writable mounts only where explicitly needed (`/workspace`, `.local`, `.cache`, `/tmp`)
-- Mounts workspace read-write, while keeping most host configs read-only
-- Forwards SSH agent socket without mounting private keys
-- Maintains persistent cache and state across container sessions
-- Auto-generates a sanitized zshrc in persistent container state for native profile use
+- Native CLI workflow over SSH/tmux/neovim
+- Two profiles: `secure` (default) and `native`
+- Read-only container root with explicit writable paths only
+- Workspace guardrails to block unsafe mounts
+- Read-only host config mounts + SSH agent forwarding (no key mounts)
+- Persistent isolated state for cache/local tooling
+- Simple launcher script with env-based configuration overrides
 
 ## Quick Start
 
@@ -125,7 +131,9 @@ To add new packages or tools to the environment, modify the `Dockerfile` and reb
 
 ## Contributing
 
-Contributions are welcome! Please ensure that any changes maintain the security model and do not introduce unnecessary privileges or mounts.
+Contributions are welcome. Please keep changes simple, configurable, and security-conscious.
+
+Forks are encouraged - this repository is designed as a practical starting point you can tailor to your own workflow.
 
 ## Migration and Handoff
 
