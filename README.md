@@ -15,7 +15,7 @@ This project provides a secure, containerized environment for running OpenCode (
 - Mounts workspace read-write, while keeping most host configs read-only
 - Forwards SSH agent socket without mounting private keys
 - Maintains persistent cache and state across container sessions
-- Generates sanitized zshrc to strip secret-loading lines from host config
+- Auto-generates a sanitized zshrc in persistent container state for native profile use
 
 ## Quick Start
 
@@ -68,7 +68,7 @@ The container is designed with security as a primary concern:
 - **Excluded Mounts**: Private SSH keys and sensitive environment files are intentionally NOT mounted.
 - **SSH Agent**: Instead of mounting keys, the host's SSH agent socket is forwarded, allowing secure authentication without exposing credentials.
 - **Environment Variables**: Only an explicit allowlist of environment variables is passed to the container.
-- **Hardening**: The container drops unnecessary capabilities (`cap-drop=ALL`), prevents privilege escalation (`no-new-privileges`), and maps the container user to the host user to maintain correct file ownership.
+- **Hardening**: The container drops unnecessary capabilities (`cap-drop=ALL`), prevents privilege escalation (`no-new-privileges`), maps the container user to the host user to maintain correct file ownership, and uses an image-level startup entrypoint for consistent policy enforcement.
 - **Filesystem Containment**: Container root is read-only (`--read-only`) with explicit writable overlays only for `/workspace`, `/tmp`, and isolated persistent cache/state.
 - **Workspace Guardrails**: The launcher rejects unsafe workspace mounts (`/`, `$HOME`, or paths outside the starting directory tree).
 
@@ -107,7 +107,7 @@ Container configuration overrides (like disabling specific agent delegations) ar
 ## Makefile Targets
 
 - `make build`: Build the Docker image
-- `make setup`: Create necessary directories and generate sanitized zshrc
+- `make setup`: Create necessary persistent directories
 - `make doctor`: Verify prerequisites and setup
 - `make run`: Run the container interactively (native profile)
 - `make run-secure`: Run the container with the secure profile
@@ -122,7 +122,6 @@ To add new packages or tools to the environment, modify the `Dockerfile` and reb
 
 - Docker
 - bash
-- zsh (required for the `native` profile shell config generation)
 
 ## Contributing
 
