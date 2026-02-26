@@ -13,6 +13,12 @@ Run OpenCode from SSH + tmux + neovim with a native workflow, while keeping stro
 - This aims to be an easy on-ramp: native feel first, with clear options to lock down harder.
 - It is a starting guide, not a final platform. Fork it, tune it, and make it your own.
 
+## Scope
+
+- Built for OpenCode today.
+- Easy to adapt for other agent CLIs (Claude Code, Codex, Gemini, and similar tools) with small launcher/image changes.
+- Keep the core idea: native terminal UX, clear boundaries, and configurable hardening.
+
 ## Features
 
 - Native CLI workflow over SSH/tmux/neovim
@@ -22,6 +28,12 @@ Run OpenCode from SSH + tmux + neovim with a native workflow, while keeping stro
 - Read-only host config mounts + SSH agent forwarding (no key mounts)
 - Persistent isolated state for cache/local tooling
 - Simple launcher script with env-based configuration overrides
+
+## Editor Workflow
+
+- The workspace is bind-mounted from your host, so container file changes are visible immediately from host editors.
+- You can keep using VS Code, neovim, or any local editor without putting that editor inside the container.
+- This keeps container complexity low while preserving a native editing loop.
 
 ## Quick Start
 
@@ -128,6 +140,14 @@ To add new packages or tools to the environment, modify the `Dockerfile` and reb
 
 - Docker
 - bash
+
+## Dependencies and Guidance
+
+- Core dependencies: Docker, bash, and `make` (used by setup/build helpers).
+- Optional host tools: tmux, neovim, VS Code, or any editor you prefer.
+- Start simple: run `./install.sh`, then `make run`.
+- Harden further as needed: use `make run-secure`, trim mounts, and keep host configs read-only.
+- Prefer fork-level customization over adding heavy framework logic here.
 
 ## Contributing
 
