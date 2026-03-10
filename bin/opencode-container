@@ -100,7 +100,6 @@ DOCKER_ARGS=(
     --read-only
     --tmpfs /tmp:rw,nosuid,nodev,exec,size=256m
     --init
-    --user "$(id -u):$(id -g)"
     --env "OPENCODE_PROFILE=$PROFILE"
     --env HOME=/home/opencode
     --env EDITOR=nvim
@@ -109,6 +108,21 @@ DOCKER_ARGS=(
     --env COLORTERM=truecolor
     --workdir /workspace
 )
+
+# Runtime-specific user mapping:
+# - Podman rootless needs keep-id for writable bind mounts.
+# - Docker uses explicit uid:gid mapping.
+RUNTIME_VERSION="$(docker --version 2>/dev/null || true)"
+RW_PERSISTENT_MOUNT_OPTS="rw"
+if [[ "$RUNTIME_VERSION" == podman* ]]; then
+    DOCKER_ARGS+=(--userns keep-id)
+    DOCKER_ARGS+=(--user "$(id -u):$(id -g)")
+    # Podman on SELinux hosts needs relabeling for writable bind mounts.
+    # Keep this Podman-only so Docker users keep default mount semantics.
+    RW_PERSISTENT_MOUNT_OPTS="rw,Z"
+else
+    DOCKER_ARGS+=(--user "$(id -u):$(id -g)")
+fi
 
 # Load config overrides with precedence:
 # 1) OPENCODE_CONFIG_CONTENT env var
@@ -140,8 +154,8 @@ fi
 DOCKER_ARGS+=(
     --volume "$WORKSPACE:/workspace:rw"
     --volume "$HOME/.config/opencode:/home/opencode/.config/opencode:ro"
-    --volume "$OPENCODE_CONTAINER_HOME/local:/home/opencode/.local:rw"
-    --volume "$OPENCODE_CONTAINER_HOME/cache:/home/opencode/.cache:rw"
+    --volume "$OPENCODE_CONTAINER_HOME/local:/home/opencode/.local:$RW_PERSISTENT_MOUNT_OPTS"
+    --volume "$OPENCODE_CONTAINER_HOME/cache:/home/opencode/.cache:$RW_PERSISTENT_MOUNT_OPTS"
 )
 
 # Git config
