@@ -20,24 +20,33 @@ ENV CARGO_HOME=/usr/local/cargo
 ENV PATH=/usr/local/cargo/bin:/usr/local/bin:${PATH}
 
 # Install system dependencies (Alpine)
-RUN apk add --no-cache \
-    bash \
-    ca-certificates \
-    curl \
-    git \
-    neovim \
-    python3 \
-    py3-pip \
-    py3-virtualenv \
-    make \
-    jq \
-    pkgconf \
-    build-base \
-    openssl-dev \
-    ripgrep \
-    fd \
-    gcompat \
-    libc6-compat
+RUN set -eu; \
+    for attempt in 1 2 3 4 5; do \
+        if apk add --no-cache \
+            bash \
+            ca-certificates \
+            curl \
+            git \
+            neovim \
+            python3 \
+            py3-pip \
+            py3-virtualenv \
+            make \
+            jq \
+            pkgconf \
+            build-base \
+            openssl-dev \
+            ripgrep \
+            fd \
+            gcompat \
+            libc6-compat; then \
+            exit 0; \
+        fi; \
+        echo "apk add failed (attempt ${attempt}/5); retrying in 5s..." >&2; \
+        sleep 5; \
+    done; \
+    echo "apk add failed after 5 attempts" >&2; \
+    exit 1
 
 # Install uv (Python package manager)
 RUN curl -LsSf https://astral.sh/uv/install.sh | sh
