@@ -1,33 +1,33 @@
 # Migration Status and Handoff
 
-This document captures the current migration status, key fixes made on this host, and what to validate on the next host.
+This document captures the current migration state of the lean containment setup and what to validate on the next host.
 
 ## Objective
 
-Ship a secure, native-feeling OpenCode container workflow with host Neovim config compatibility and clear operational handoff.
+Ship a secure, native-feeling OpenCode container workflow with a small, easy-to-audit architecture and clear operational handoff.
 
 ## Completed Work
 
-- Project scaffold and tooling (`bin/`, `config/`, `scripts/`, `Makefile`, `README`, `LICENSE`, `.gitignore`)
+- Lean core architecture centered on `Dockerfile`, `bin/opencode-container`, `Makefile`, and `opencode-local.example.sh`
 - Hardened Docker runtime wrapper with profile support (`secure`, `native`)
-- Alpine-compatible Docker image and core dev tooling
+- Alpine-compatible Docker image with core dev tooling and a prepared Neovim parser directory
 - Native Neovim host mount strategy (read-only config/plugins with writable persistent state)
-- Tree-sitter bootstrap and parser persistence workflow
-- Markdown LSP (`marksman`) install and compatibility hardening
+- Simplified entrypoint in `scripts/container-init.sh` (banner + exec)
+- Single local override pattern via `opencode-local.sh`
 - Compatibility additions for prebuilt binaries on Alpine (`gcompat`, `libc6-compat`)
 
-## Recent Change Log (Head)
+## Current Layout
 
-- `f3a5481` fix: add gcompat for binary compatibility, nvim wrapper for runtimepath, and blink.cmp overlay
-- `b3aad40` fix: redirect tree-sitter parser install to writable site/parser dir
-- `f6b1de0` fix: writable parser overlay for nvim-treesitter + add marksman LSP
-- `3b13fdb` fix: add tree-sitter parser auto-compilation for Alpine/musl container
-- `d5a7d2d` fix: native Neovim experience and defaults
+- `Dockerfile`: builds the environment and installs tools plus parser artifacts
+- `bin/opencode-container`: single launcher entry point with mount policy and profile logic
+- `opencode-local.example.sh`: tracked example for local-only overrides copied to `opencode-local.sh`
+- `Makefile`: helper targets for build, setup, run, doctor, and shell install
+- Supporting files: `scripts/nvim-wrapper`, `scripts/container-init.sh`, `.gitignore`, `LICENSE`
 
 ## Known Constraints
 
 - Host-specific plugin binary artifacts can still vary across machines (especially prebuilt native plugin components).
-- First-run parser/bootstrap actions may take longer due to compile/setup behavior.
+- Native profile behavior still depends on what you mount from the host, especially personal Neovim config.
 - Clipboard behavior in terminal Neovim depends on terminal capabilities on the target host.
 
 ## Migration Steps for New Host
@@ -35,11 +35,13 @@ Ship a secure, native-feeling OpenCode container workflow with host Neovim confi
 1. Install prerequisites: Docker, bash, zsh.
 2. Clone repo and build image:
    - `make build`
-3. Initialize local runtime directories/config:
+3. Initialize local runtime directories:
    - `make setup`
-4. Optional diagnostics:
+4. Optional: create local overrides:
+   - `cp opencode-local.example.sh opencode-local.sh`
+5. Optional diagnostics:
    - `make doctor`
-5. Run native profile:
+6. Run native profile:
    - `make run`
 
 ## Validation Checklist on New Host

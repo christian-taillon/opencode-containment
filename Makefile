@@ -1,4 +1,4 @@
-.PHONY: help build setup setup-parsers run run-native run-secure doctor clean shell-install init-local-overrides
+.PHONY: help build setup run run-native run-secure doctor clean shell-install
 
 # Project variables
 PROJECT_NAME := opencode-containment
@@ -16,12 +16,8 @@ build: ## Build the Docker image as opencode-containment:latest
 
 setup: ## Create persistent directories for container cache/state
 	@echo "Running setup..."
-	@mkdir -p $(OPENCODE_CONTAINER_HOME)/cache $(OPENCODE_CONTAINER_HOME)/local $(OPENCODE_CONTAINER_HOME)/local/share/nvim/site/parser $(OPENCODE_CONTAINER_HOME)/local/share/nvim/lazy/blink.cmp/target
+	@mkdir -p $(OPENCODE_CONTAINER_HOME)/cache $(OPENCODE_CONTAINER_HOME)/local
 	@echo "Setup complete."
-
-setup-parsers: ## Pre-compile tree-sitter parsers inside the container (requires native profile)
-	@echo "Pre-compiling tree-sitter parsers (first run may take a minute)..."
-	@bash bin/opencode-container --profile native -- echo "Parser setup complete"
 
 run: ## Run container with native profile (best UX)
 	@bash bin/opencode-container --profile native
@@ -47,9 +43,6 @@ clean: ## Remove generated files and persistent data (with confirmation)
 	else \
 		echo "Aborted."; \
 	fi
-
-init-local-overrides: ## Create local gitignored override files from examples
-	@bash scripts/init-local-overrides.sh
 
 shell-install: ## Install the opencode-container command to ~/.local/bin (symlink)
 	@mkdir -p $(HOME)/.local/bin

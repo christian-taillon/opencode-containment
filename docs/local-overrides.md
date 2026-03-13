@@ -2,42 +2,38 @@
 
 This project keeps committed defaults minimal and provider-agnostic.
 
-Put personal configuration in local-only files that are gitignored by default.
+Put personal configuration in `opencode-local.sh` (gitignored by default).
 
-## Files
+## Setup
 
-- `config/opencode-overrides.local.json`: Optional JSON passed to `OPENCODE_CONFIG_CONTENT`.
-- `config/opencode-container.local.sh`: Optional shell hook sourced by `bin/opencode-container`.
-- `.zsh_opencode_container.local`: Optional shell-local exports loaded by `container-opencode`.
-
-## Create Local Files
+Copy the example file and customize:
 
 ```bash
-scripts/init-local-overrides.sh
+cp opencode-local.example.sh opencode-local.sh
 ```
 
-Non-interactive:
+## What You Can Configure
 
-```bash
-scripts/init-local-overrides.sh --yes
-```
+`opencode-local.sh` is sourced by `bin/opencode-container` before `docker run`. You can:
 
-Overwrite existing local files:
+- Set `OPENCODE_CONFIG_CONTENT` (JSON string passed to the container)
+- Set `OPENCODE_OVERRIDES_FILE` (path to a JSON file)
+- Set `OPENCODE_PROFILE` or `OPENCODE_IMAGE` defaults
+- Append to `DOCKER_ARGS` for extra mounts or env vars
+- Sync auth files or credentials
 
-```bash
-scripts/init-local-overrides.sh --yes --force
-```
+See `opencode-local.example.sh` for commented examples.
 
-## Layering
+## Precedence
 
-`bin/opencode-container` uses this precedence for config content:
+Config content is resolved in this order:
 
-1. `OPENCODE_CONFIG_CONTENT` environment variable.
-2. `OPENCODE_OVERRIDES_FILE` path (defaults to `config/opencode-overrides.local.json`).
-3. No extra config content.
+1. `OPENCODE_CONFIG_CONTENT` environment variable
+2. `OPENCODE_OVERRIDES_FILE` path (if set and file exists)
+3. No extra config content
 
 ## Keep It Clean
 
-- Keep provider-specific policies in local files only.
-- Keep credential passthrough in local hooks only.
-- Do not commit tokens, secrets, or personal mount paths.
+- Keep provider-specific policies in your local file only
+- Keep credential passthrough in your local file only
+- Do not commit tokens, secrets, or personal mount paths

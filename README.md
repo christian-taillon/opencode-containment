@@ -4,7 +4,7 @@ A simple, highly configurable, native-feeling containment starter for OpenCode.
 
 ## Overview
 
-Run OpenCode from SSH + tmux + neovim with a native workflow, while keeping strong host safety defaults. This project is intentionally small and easy to adapt.
+Run OpenCode from SSH + tmux + neovim with a native workflow, while keeping strong host safety defaults. This project is intentionally minimal: a small launcher, a single image build, one local override hook, and a few helper targets you can adapt without digging through framework code.
 
 ## Why
 
@@ -23,11 +23,11 @@ Run OpenCode from SSH + tmux + neovim with a native workflow, while keeping stro
 
 - Native CLI workflow over SSH/tmux/neovim
 - Two profiles: `secure` (default) and `native`
+- Prepared Neovim parser install directory inside the image
 - Read-only container root with explicit writable paths only
 - Workspace guardrails to block unsafe mounts
 - Read-only host config mounts + SSH agent forwarding (no key mounts)
-- Persistent isolated state for cache/local tooling
-- Clean baseline launcher with optional local-only overrides
+- One local-only override hook for personal config, mounts, and auth sync
 
 ## Editor Workflow
 
@@ -42,28 +42,19 @@ Run OpenCode from SSH + tmux + neovim with a native workflow, while keeping stro
    git clone https://github.com/christian-taillon/opencode-containment.git
    cd opencode-containment
    ```
-2. Run the installer (recommended):
-   ```bash
-   ./install.sh
-   ```
-   This builds the image, runs setup, and checks your environment.
-
-3. (Manual path) Build the container image:
+2. Build the image and create local state directories:
    ```bash
    make build
-   ```
-4. (Manual path) Set up the environment:
-   ```bash
    make setup
    ```
-5. (Optional) Verify your setup:
+3. Run the native profile:
+   ```bash
+   make run
+   # or directly: bin/opencode-container --profile native
+   ```
+4. Optional: verify your environment:
    ```bash
    make doctor
-   ```
-6. Run the container:
-   ```bash
-     make run
-     # or directly: bin/opencode-container --profile native
    ```
 
 ## Profiles
@@ -76,7 +67,7 @@ The environment supports two profiles to balance security and convenience:
 | SSH Agent Socket | Forwarded | Forwarded |
 | Host Configs | Git, SSH Config (Read-Only) | Read-Only (git, ssh config) |
 | Editor Config | None | Read-Only config/plugins + RW state/cache |
-| Shell Config | Default | Sanitized Host Config |
+| Shell Config | Default | Container Default |
 
 ## Security Model
 
@@ -99,32 +90,34 @@ The container is designed with security as a primary concern:
 ## Architecture
 
 ```text
-+-------------------+       +------------------------+       +-------------------------+
-|                   |       |                        |       |                         |
-|   Host System     | ----> |  opencode-container    | ----> |  Docker Container       |
-|   (Workspace,     |       |  (CLI Wrapper)         |       |  (OpenCode + Dev Tools) |
-|   SSH Agent)      |       |  - Applies security    |       |  - /workspace Mount     |
-|                   |       |  - Sets up mounts      |       |  - Read-Only Configs    |
-+-------------------+       +------------------------+       +-------------------------+
++---------------------------+       +--------------------------+       +----------------------+
+| Host System               | ----> | bin/opencode-container   | ----> | Docker Image         |
+| - workspace               |       | - profile selection      |       | - OpenCode + tools   |
+| - ssh agent               |       | - mount guardrails       |       | - parser dir ready   |
+| - optional local config   |       | - local override hook    |       | - container-init     |
++---------------------------+       +--------------------------+       +----------------------+
 ```
 
 ## Configuration
 
-You can customize the environment using environment variables:
+You can customize the environment with environment variables or a local override script:
+
 - `OPENCODE_PROFILE`: Set to `native` to use the native profile (default is `secure`).
 - `OPENCODE_IMAGE`: Override the default Docker image.
 - `OPENCODE_WORKSPACE`: Override the workspace directory to mount.
 - `OPENCODE_OVERRIDES_FILE`: Optional JSON file to pass as `OPENCODE_CONFIG_CONTENT`.
 
-For local customization, generate gitignored override files:
+For local customization, copy the tracked example file and keep your personal changes in `opencode-local.sh`:
 
 ```bash
-scripts/init-local-overrides.sh
+cp opencode-local.example.sh opencode-local.sh
 ```
 
-This creates local templates you can edit without committing personal/provider-specific settings.
+`bin/opencode-container` sources `opencode-local.sh` before `docker run`, so you can set default profiles, pass JSON config, add mounts or env vars, and sync local auth into the persistent container state without committing any of it.
 
-To install the `opencode` command globally in your shell, run:
+If you want a sanitized zsh setup, generate it locally in your own script and source or mount it from `opencode-local.sh`. The repo no longer manages that workflow for you.
+
+To install the `opencode-container` command globally in your shell, run:
 ```bash
 make shell-install
 ```
@@ -137,9 +130,9 @@ See `docs/local-overrides.md` for local override layering and examples.
 - `make setup`: Create necessary persistent directories
 - `make doctor`: Verify prerequisites and setup
 - `make run`: Run the container interactively (native profile)
+- `make run-native`: Run the container interactively (native profile)
 - `make run-secure`: Run the container with the secure profile
-- `make init-local-overrides`: Generate local gitignored override files
-- `make shell-install`: Install the `opencode` command globally in your shell
+- `make shell-install`: Install `opencode-container` to `~/.local/bin`
 - `make clean`: Remove generated files and persistent state
 
 ## Customization
@@ -155,7 +148,7 @@ To add new packages or tools to the environment, modify the `Dockerfile` and reb
 
 - Core dependencies: Docker, bash, and `make` (used by setup/build helpers).
 - Optional host tools: tmux, neovim, VS Code, or any editor you prefer.
-- Start simple: run `./install.sh`, then `make run`.
+- Start simple: run `make build`, `make setup`, then `make run`.
 - Harden further as needed: use `make run-secure`, trim mounts, and keep host configs read-only.
 - Prefer fork-level customization over adding heavy framework logic here.
 
@@ -164,10 +157,6 @@ To add new packages or tools to the environment, modify the `Dockerfile` and reb
 Contributions are welcome. Please keep changes simple, configurable, and security-conscious.
 
 Forks are encouraged - this repository is designed as a practical starting point you can tailor to your own workflow.
-
-## Migration and Handoff
-
-For current migration progress, validation checklist, and host-to-host handoff notes, see `docs/migration-status.md`.
 
 ## License
 

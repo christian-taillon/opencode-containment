@@ -64,6 +64,11 @@ RUN ARCH="$(uname -m)" && \
 COPY scripts/nvim-wrapper /usr/local/bin/nvim
 RUN chmod +x /usr/local/bin/nvim
 
+# Pre-create the parser directory inside the image so native configs can
+# install parsers without any extra runtime bootstrap script.
+RUN mkdir -p /home/opencode/.local/share/nvim/site/parser \
+    && chown -R 1000:1000 /home/opencode/.local/share/nvim
+
 # Install startup entrypoint that enforces containment behavior
 COPY scripts/container-init.sh /usr/local/bin/entrypoint.sh
 RUN chmod +x /usr/local/bin/entrypoint.sh
