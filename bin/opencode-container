@@ -108,6 +108,10 @@ DOCKER_ARGS=(
     --workdir /workspace
 )
 
+# Pass GitHub tokens if they exist
+[[ -n "${GITHUB_TOKEN:-}" ]] && DOCKER_ARGS+=(--env GITHUB_TOKEN="$GITHUB_TOKEN")
+[[ -n "${GH_TOKEN:-}" ]] && DOCKER_ARGS+=(--env GH_TOKEN="$GH_TOKEN")
+
 if [[ -t 0 && -t 1 ]]; then
     DOCKER_ARGS+=(-it)
 fi
@@ -154,6 +158,11 @@ DOCKER_ARGS+=(
 # Git config
 if [[ -f "$HOME/.gitconfig" ]]; then
     DOCKER_ARGS+=(--volume "$HOME/.gitconfig:/home/opencode/.gitconfig:ro")
+fi
+
+# GitHub CLI config
+if [[ -d "$HOME/.config/gh" ]]; then
+    DOCKER_ARGS+=(--volume "$HOME/.config/gh:/home/opencode/.config/gh:ro")
 fi
 
 # Optional local hook for personal env vars, extra mounts, or config overrides.

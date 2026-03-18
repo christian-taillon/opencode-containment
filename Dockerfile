@@ -22,13 +22,19 @@ RUN set -eu; \
     for attempt in 1 2 3 4 5; do \
         if apk add --no-cache \
             bash \
+            zsh \
             ca-certificates \
             curl \
+            openssh-client \
+            gnupg \
             git \
+            github-cli \
             neovim \
             python3 \
             py3-pip \
             py3-virtualenv \
+            nodejs \
+            npm \
             make \
             jq \
             pkgconf \
@@ -36,6 +42,13 @@ RUN set -eu; \
             openssl-dev \
             ripgrep \
             fd \
+            fzf \
+            bat \
+            eza \
+            zoxide \
+            direnv \
+            git-crypt \
+            sops \
             gcompat \
             libc6-compat; then \
             exit 0; \
@@ -45,6 +58,9 @@ RUN set -eu; \
     done; \
     echo "apk add failed after 5 attempts" >&2; \
     exit 1
+
+# Ensure python is available as a command
+RUN ln -sf /usr/bin/python3 /usr/bin/python
 
 # Install uv (Python package manager)
 RUN curl -LsSf https://astral.sh/uv/install.sh | sh
