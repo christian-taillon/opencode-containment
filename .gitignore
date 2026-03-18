@@ -21,3 +21,13 @@ Thumbs.db
 
 # Docker build cache
 .docker-build-*
+
+# Container shell config (local only)
+.zsh_opencode_container
+.zsh_opencode_container.local.example
+
+# Notes
+IDEAS.md
+
+# Scripts (local only)
+scripts/generate-container-zshrc.sh
