@@ -149,8 +149,9 @@ fi
 
 # Secure profile mounts
 DOCKER_ARGS+=(
-    --volume "$WORKSPACE:/workspace:rw,exec"
+    --volume "$WORKSPACE:/workspace:rw"
     --volume "$HOME/.config/opencode:/home/opencode/.config/opencode:ro"
+
     --volume "$OPENCODE_CONTAINER_HOME/local:/home/opencode/.local:$RW_PERSISTENT_MOUNT_OPTS"
     --volume "$OPENCODE_CONTAINER_HOME/cache:/home/opencode/.cache:$RW_PERSISTENT_MOUNT_OPTS"
 )
