@@ -27,7 +27,8 @@ Run OpenCode from SSH + tmux + neovim with a native workflow, while keeping stro
 - Read-only container root with explicit writable paths only
 - Workspace guardrails to block unsafe mounts
 - Read-only host config mounts + SSH agent forwarding (no key mounts)
-- One local-only override hook for personal config, mounts, and auth sync
+- Host `opencode login` state mirrored into containment by default
+- One local-only override hook for personal config, mounts, and auth behavior
 
 ## Editor Workflow
 
@@ -57,6 +58,8 @@ Run OpenCode from SSH + tmux + neovim with a native workflow, while keeping stro
    make doctor
    ```
 
+Host OpenCode auth from `~/.local/share/opencode` is mirrored into the container's persistent state automatically, so providers you have already logged into on the host should appear inside `make run` without extra setup.
+
 ## Profiles
 
 The environment supports two profiles to balance security and convenience:
@@ -80,6 +83,7 @@ The container is designed with security as a primary concern:
 - **Hardening**: The container drops unnecessary capabilities (`cap-drop=ALL`), prevents privilege escalation (`no-new-privileges`), maps the container user to the host user to maintain correct file ownership, and uses an image-level startup entrypoint for consistent policy enforcement.
 - **Filesystem Containment**: Container root is read-only (`--read-only`) with explicit writable overlays only for `/workspace`, `/tmp`, and isolated persistent cache/state.
 - **Workspace Guardrails**: The launcher rejects unsafe workspace mounts (`/`, `$HOME`, or paths outside the starting directory tree).
+- **OpenCode Auth**: Host OpenCode login state is copied into the container's isolated persistent state before launch. This preserves provider visibility without mounting the entire host home directory.
 
 ## Command Choices
 
@@ -114,6 +118,8 @@ cp opencode-local.example.sh opencode-local.sh
 ```
 
 `bin/opencode-container` sources `opencode-local.sh` before `docker run`, so you can set default profiles, pass JSON config, add mounts or env vars, and sync local auth into the persistent container state without committing any of it.
+
+By default, the launcher mirrors host OpenCode auth from `~/.local/share/opencode`. Set `OPENCODE_SYNC_HOST_AUTH=0` in `opencode-local.sh` if you want the container to keep a separate login identity, or set `OPENCODE_HOST_STATE_DIR` to mirror from a different location.
 
 If you want a sanitized zsh setup, generate it locally in your own script and source or mount it from `opencode-local.sh`. The repo no longer manages that workflow for you.
 

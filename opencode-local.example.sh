@@ -28,8 +28,12 @@
 # [[ -n "${tc_secretkey:-}" ]] && DOCKER_ARGS+=(--env "tc_secretkey=$tc_secretkey")
 
 # --- Auth Sync ---
-# Example: sync host auth into container persistent state.
-# if [[ -f "$HOME/.local/share/opencode/auth.json" ]]; then
-#   mkdir -p "$OPENCODE_CONTAINER_HOME/local/share/opencode"
-#   cp "$HOME/.local/share/opencode/auth.json" "$OPENCODE_CONTAINER_HOME/local/share/opencode/auth.json"
-# fi
+# Host OpenCode auth sync is enabled by default. The launcher copies the host
+# auth/database files from ~/.local/share/opencode into the container's
+# persistent ~/.local before startup so logged-in providers show up inside.
+#
+# Disable it if you want a clean container identity:
+# export OPENCODE_SYNC_HOST_AUTH=0
+#
+# Or point at a different host state directory:
+# export OPENCODE_HOST_STATE_DIR="$HOME/.local/share/opencode"

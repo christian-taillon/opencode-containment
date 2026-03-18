@@ -8,6 +8,8 @@ PROFILE="${OPENCODE_PROFILE:-secure}"
 IMAGE="${OPENCODE_IMAGE:-opencode-containment:latest}"
 WORKSPACE="${OPENCODE_WORKSPACE:-$PWD}"
 OPENCODE_CONTAINER_HOME="${OPENCODE_CONTAINER_HOME:-$HOME/.local/share/opencode-container}"
+OPENCODE_HOST_STATE_DIR="${OPENCODE_HOST_STATE_DIR:-$HOME/.local/share/opencode}"
+OPENCODE_SYNC_HOST_AUTH="${OPENCODE_SYNC_HOST_AUTH:-1}"
 
 show_help() {
     cat <<EOF
@@ -172,6 +174,24 @@ LOCAL_HOOK="$SCRIPT_DIR/opencode-local.sh"
 if [[ -f "$LOCAL_HOOK" ]]; then
     # shellcheck disable=SC1090
     source "$LOCAL_HOOK"
+fi
+
+# Mirror host OpenCode auth and provider state into the container's persistent
+# local state so `opencode login` on the host remains visible in containment.
+if [[ "$OPENCODE_SYNC_HOST_AUTH" != "0" && -d "$OPENCODE_HOST_STATE_DIR" ]]; then
+    CONTAINER_OPENCODE_STATE="$OPENCODE_CONTAINER_HOME/local/share/opencode"
+    mkdir -p "$CONTAINER_OPENCODE_STATE"
+
+    for host_file in \
+        "$OPENCODE_HOST_STATE_DIR/auth.json" \
+        "$OPENCODE_HOST_STATE_DIR/opencode.db" \
+        "$OPENCODE_HOST_STATE_DIR/opencode.db-shm" \
+        "$OPENCODE_HOST_STATE_DIR/opencode.db-wal"
+    do
+        if [[ -f "$host_file" ]]; then
+            cp -f "$host_file" "$CONTAINER_OPENCODE_STATE/"
+        fi
+    done
 fi
 
 # Load config overrides with precedence:

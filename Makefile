@@ -34,6 +34,7 @@ doctor: ## Check prerequisites
 	@docker image inspect $(IMAGE_NAME) >/dev/null 2>&1 && echo "✅ Image $(IMAGE_NAME) is built" || echo "❌ Image $(IMAGE_NAME) is not built"
 	@[ -n "$$SSH_AUTH_SOCK" ] && [ -S "$$SSH_AUTH_SOCK" ] && echo "✅ SSH agent is running" || echo "⚠️ SSH agent is not running or socket not found"
 	@[ -d "$(OPENCODE_CONTAINER_HOME)" ] && echo "✅ Persistent directory exists" || echo "❌ Persistent directory does not exist"
+	@[ -f "$(HOME)/.local/share/opencode/auth.json" ] && echo "✅ Host OpenCode auth detected" || echo "⚠️ Host OpenCode auth not detected"
 
 clean: ## Remove generated files and persistent data (with confirmation)
 	@read -p "Are you sure you want to remove generated files and persistent data? [y/N] " ans; \
