@@ -11,6 +11,19 @@
 # export OPENCODE_PROFILE="native"
 # export OPENCODE_IMAGE="opencode-containment:latest"
 
+# --- Optional Proxy / CA Passthrough ---
+# Runtime and docker builds both pass through standard proxy variables only when set.
+# Keep NO_PROXY aligned with localhost/127.0.0.1 for the local OpenCode server when needed.
+# export HTTPS_PROXY="http://proxy.example:3128"
+# export HTTP_PROXY="$HTTPS_PROXY"
+# export ALL_PROXY="$HTTPS_PROXY"
+# export NO_PROXY="localhost,127.0.0.1"
+# export NODE_EXTRA_CA_CERTS="$HOME/.config/opencode/corp-ca.pem"
+
+# --- Optional Extra Alpine Packages For Local Builds ---
+# Add local-only packages during `make build` without committing Dockerfile changes.
+# export OPENCODE_BUILD_EXTRA_APK_PACKAGES="htop sqlite"
+
 # --- OpenCode Config Override (JSON) ---
 # Set this to pass custom config into the container:
 # export OPENCODE_CONFIG_CONTENT='{"agent":{}}'

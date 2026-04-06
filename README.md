@@ -29,6 +29,9 @@ Run OpenCode from SSH + tmux + neovim with a native workflow, while keeping stro
 - Read-only host config mounts + SSH agent forwarding (no key mounts)
 - Host `opencode login` state mirrored into containment by default
 - One local-only override hook for personal config, mounts, and auth behavior
+- Optional proxy and custom CA passthrough for build/run environments
+- Local-only extra Alpine packages during builds without adding a new config system
+- More portable launcher path handling for macOS hosts
 
 ## Editor Workflow
 
@@ -44,21 +47,32 @@ Run OpenCode from SSH + tmux + neovim with a native workflow, while keeping stro
    cd opencode-containment
    ```
 2. Build the image and create local state directories:
-   ```bash
-   make build
+    ```bash
+    make build
    make setup
    ```
 3. Run the native profile:
    ```bash
    make run
-   # or directly: bin/opencode-container --profile native
+    # or directly: bin/opencode-container --profile native
    ```
-4. Optional: verify your environment:
+4. Pass OpenCode subcommands directly through the launcher:
+   ```bash
+   opencode-container auth ls
+   opencode-container models --refresh
+   ```
+   Use `--` only when you want to run a raw command in the container:
+   ```bash
+   opencode-container -- bash
+   ```
+5. Optional: verify your environment:
    ```bash
    make doctor
    ```
 
 Host OpenCode auth from `~/.local/share/opencode` is mirrored into the container's persistent state automatically, so providers you have already logged into on the host should appear inside `make run` without extra setup.
+
+If you are behind a proxy or need an internal CA bundle, set the standard proxy variables in your shell or `opencode-local.sh` before `make build` / `make run`. They are only passed through when explicitly set.
 
 ## Profiles
 
@@ -110,6 +124,9 @@ You can customize the environment with environment variables or a local override
 - `OPENCODE_IMAGE`: Override the default Docker image.
 - `OPENCODE_WORKSPACE`: Override the workspace directory to mount.
 - `OPENCODE_OVERRIDES_FILE`: Optional JSON file to pass as `OPENCODE_CONFIG_CONTENT`.
+- Standard proxy env vars (`HTTP_PROXY`, `HTTPS_PROXY`, `ALL_PROXY`, `NO_PROXY`, lowercase variants) are passed through for both runtime and `make build` when set.
+- `NODE_EXTRA_CA_CERTS`: Optional custom CA bundle path passed through for runtime and builds when set.
+- `OPENCODE_BUILD_EXTRA_APK_PACKAGES`: Optional local-only extra Alpine packages to install during `make build`.
 
 For local customization, copy the tracked example file and keep your personal changes in `opencode-local.sh`:
 
@@ -118,6 +135,19 @@ cp opencode-local.example.sh opencode-local.sh
 ```
 
 `bin/opencode-container` sources `opencode-local.sh` before `docker run`, so you can set default profiles, pass JSON config, add mounts or env vars, and sync local auth into the persistent container state without committing any of it.
+
+`make build` now uses `scripts/build-image.sh`, which also sources `opencode-local.sh`. That keeps one local override flow for both runtime and build behavior.
+
+Example local-only build additions:
+
+```bash
+export OPENCODE_BUILD_EXTRA_APK_PACKAGES="htop sqlite"
+export HTTPS_PROXY="http://proxy.example:3128"
+export NO_PROXY="localhost,127.0.0.1"
+export NODE_EXTRA_CA_CERTS="$HOME/.config/opencode/corp-ca.pem"
+```
+
+If extra packages are requested and `apk add` fails, the build stops with a message that includes the requested package list.
 
 By default, the launcher mirrors host OpenCode auth from `~/.local/share/opencode`. Set `OPENCODE_SYNC_HOST_AUTH=0` in `opencode-local.sh` if you want the container to keep a separate login identity, or set `OPENCODE_HOST_STATE_DIR` to mirror from a different location.
 
@@ -129,6 +159,12 @@ make shell-install
 ```
 
 See `docs/local-overrides.md` for local override layering and examples.
+
+## macOS Host Notes
+
+- The launcher no longer requires GNU `realpath`; it falls back to portable shell path resolution that works on current macOS hosts.
+- Docker Desktop on macOS still runs containers inside a Linux VM. Bind-mounted workspace writes land on the host as usual, but host network/device visibility differs from native Linux.
+- Keep expectations realistic: this repo preserves one main profile-driven workflow, not a perfect host-isolation boundary across every Docker Desktop backend detail.
 
 ## Makefile Targets
 
@@ -143,7 +179,7 @@ See `docs/local-overrides.md` for local override layering and examples.
 
 ## Customization
 
-To add new packages or tools to the environment, modify the `Dockerfile` and rebuild the image using `make build`. To adjust mounts or security settings, update the `bin/opencode-container` script.
+To add personal packages without committing Dockerfile changes, set `OPENCODE_BUILD_EXTRA_APK_PACKAGES` in `opencode-local.sh` and rebuild with `make build`. For shared base-image changes, edit the `Dockerfile`. To adjust mounts or security settings, update `bin/opencode-container`.
 
 ## Prerequisites
 

@@ -19,8 +19,35 @@ cp opencode-local.example.sh opencode-local.sh
 - Set `OPENCODE_CONFIG_CONTENT` (JSON string passed to the container)
 - Set `OPENCODE_OVERRIDES_FILE` (path to a JSON file)
 - Set `OPENCODE_PROFILE` or `OPENCODE_IMAGE` defaults
+- Set optional proxy or custom CA environment variables for both runtime and builds
+- Set `OPENCODE_BUILD_EXTRA_APK_PACKAGES` for local-only extra Alpine packages during image builds
 - Append to `DOCKER_ARGS` for extra mounts or env vars
+- Append to `DOCKER_BUILD_ARGS` for extra `docker build` flags
 - Override or disable host OpenCode auth mirroring
+
+## Optional Proxy Support
+
+The launcher and build helper pass through standard proxy settings only when you set them:
+
+- `HTTP_PROXY` / `http_proxy`
+- `HTTPS_PROXY` / `https_proxy`
+- `ALL_PROXY` / `all_proxy`
+- `NO_PROXY` / `no_proxy`
+- `NODE_EXTRA_CA_CERTS`
+
+That keeps the default behavior unchanged for normal local builds and runs. If you proxy OpenCode traffic, keep `NO_PROXY=localhost,127.0.0.1` when you need the local TUI server to stay direct.
+
+## Local Build Extras
+
+Use the existing local hook instead of a committed package config file:
+
+```bash
+export OPENCODE_BUILD_EXTRA_APK_PACKAGES="htop sqlite"
+```
+
+Then run `make build`. The build helper sources `opencode-local.sh`, forwards that value as a build arg, and the Dockerfile installs the extra packages after the base package set.
+
+If an extra package name is wrong or unavailable, the build fails with a clear message listing the requested extra packages.
 
 ## Host OpenCode Auth
 

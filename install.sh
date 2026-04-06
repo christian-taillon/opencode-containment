@@ -33,6 +33,8 @@ Next steps:
   1) Start the container: make run
   2) Optional secure mode: make run-secure
   3) Optional: copy opencode-local.example.sh to opencode-local.sh and customize
+     - proxy / custom CA passthrough
+     - local extra Alpine packages for builds
   4) Optional CLI install: make shell-install
 
 EOF
