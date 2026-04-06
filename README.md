@@ -22,7 +22,8 @@ Run OpenCode from SSH + tmux + neovim with a native workflow, while keeping stro
 ## Features
 
 - Native CLI workflow over SSH/tmux/neovim
-- Two profiles: `secure` (default) and `native`
+- One main daily workflow: `make run`
+- Optional lower-integration mode: `make run-secure`
 - Prepared Neovim parser install directory inside the image
 - Read-only container root with explicit writable paths only
 - Workspace guardrails to block unsafe mounts
@@ -51,10 +52,10 @@ Run OpenCode from SSH + tmux + neovim with a native workflow, while keeping stro
     make build
    make setup
    ```
-3. Run the native profile:
+3. Run the main workflow:
    ```bash
    make run
-    # or directly: bin/opencode-container --profile native
+     # or directly: bin/opencode-container --profile native
    ```
 4. Pass OpenCode subcommands directly through the launcher:
    ```bash
@@ -74,11 +75,16 @@ Host OpenCode auth from `~/.local/share/opencode` is mirrored into the container
 
 If you are behind a proxy or need an internal CA bundle, set the standard proxy variables in your shell or `opencode-local.sh` before `make build` / `make run`. They are only passed through when explicitly set.
 
-## Profiles
+## Runtime Modes
 
-The environment supports two profiles to balance security and convenience:
+This project is designed around one main path for daily use:
 
-| Feature | `secure` Profile (Default) | `native` Profile |
+- `make run` / `--profile native`: recommended default workflow
+- `make run-secure` / `--profile secure`: optional lower-integration mode
+
+Both modes exist, but the project is intentionally optimized around the native daily workflow so developers will actually use it.
+
+| Feature | `secure` Mode | `native` Mode |
 |---------|----------------------------|------------------|
 | Workspace Mount | Read-Write | Read-Write |
 | SSH Agent Socket | Forwarded | Forwarded |
@@ -101,8 +107,8 @@ The container is designed with security as a primary concern:
 
 ## Command Choices
 
-- `make run`: Starts the native profile for daily use (better editor/shell UX)
-- `make run-secure`: Starts the secure profile with minimal integration
+- `make run`: Starts the recommended daily workflow (`native` mode)
+- `make run-secure`: Starts the optional lower-integration mode (`secure`)
 - `make shell-install`: Installs `opencode-container` symlink to `~/.local/bin` for convenience
 
 ## Architecture
@@ -120,7 +126,7 @@ The container is designed with security as a primary concern:
 
 You can customize the environment with environment variables or a local override script:
 
-- `OPENCODE_PROFILE`: Set to `native` to use the native profile (default is `secure`).
+- `OPENCODE_PROFILE`: Override the runtime mode (`secure` or `native`). The recommended daily workflow is `make run`, which uses `native`.
 - `OPENCODE_IMAGE`: Override the default Docker image.
 - `OPENCODE_WORKSPACE`: Override the workspace directory to mount.
 - `OPENCODE_OVERRIDES_FILE`: Optional JSON file to pass as `OPENCODE_CONFIG_CONTENT`.
@@ -164,16 +170,16 @@ See `docs/local-overrides.md` for local override layering and examples.
 
 - The launcher no longer requires GNU `realpath`; it falls back to portable shell path resolution that works on current macOS hosts.
 - Docker Desktop on macOS still runs containers inside a Linux VM. Bind-mounted workspace writes land on the host as usual, but host network/device visibility differs from native Linux.
-- Keep expectations realistic: this repo preserves one main profile-driven workflow, not a perfect host-isolation boundary across every Docker Desktop backend detail.
+- Keep expectations realistic: this repo preserves one main recommended workflow with an optional lower-integration mode, not a perfect host-isolation boundary across every Docker Desktop backend detail.
 
 ## Makefile Targets
 
 - `make build`: Build the Docker image
 - `make setup`: Create necessary persistent directories
 - `make doctor`: Verify prerequisites and setup
-- `make run`: Run the container interactively (native profile)
-- `make run-native`: Run the container interactively (native profile)
-- `make run-secure`: Run the container with the secure profile
+- `make run`: Run the container interactively in the recommended daily workflow (`native`)
+- `make run-native`: Alias for the native daily workflow
+- `make run-secure`: Run the container in the optional lower-integration mode (`secure`)
 - `make shell-install`: Install `opencode-container` to `~/.local/bin`
 - `make clean`: Remove generated files and persistent state
 

@@ -7,7 +7,7 @@ If this environment is too restrictive, developers will not use it.
 This project intentionally aims for a practical middle ground:
 - reduce accidental host damage
 - reduce direct write access to sensitive host config
-- keep normal development workflows working
+- keep the main developer workflow working
 
 It is a risk-reduction wrapper, not a perfect sandbox.
 
@@ -33,6 +33,7 @@ It is a risk-reduction wrapper, not a perfect sandbox.
 | Open internet access | Accepted | Needed for package installs, search, web fetch, and normal development. |
 | Mirrored OpenCode auth by default | Accepted | Keeps host and container usage simple. |
 | Persistent container state/cache | Accepted | Avoids repeated setup and re-login on every run. |
+| Optional secure mode remains available | Accepted | Kept as a lower-integration fallback, but not made the main path to avoid adoption friction. |
 
 ## Not Fully Solved
 
@@ -49,6 +50,7 @@ It is a risk-reduction wrapper, not a perfect sandbox.
 - We did not remove SSH, GitHub access, or OpenCode auth because many real workflows need them.
 - We did not block normal internet access by default because that adds too much friction.
 - We avoided adding many security profiles because complexity reduces adoption.
+- We kept one main recommended workflow and one optional lower-integration mode because that is simpler to explain and use.
 
 ## Bottom Line
 
