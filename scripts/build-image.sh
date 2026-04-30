@@ -34,4 +34,4 @@ fi
 
 add_build_arg_if_set EXTRA_APK_PACKAGES
 
-exec docker build "${DOCKER_BUILD_ARGS[@]}" -t "$IMAGE_NAME" "$ROOT_DIR"
+exec docker build --pull "${DOCKER_BUILD_ARGS[@]}" -t "$IMAGE_NAME" "$ROOT_DIR"

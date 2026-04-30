@@ -22,6 +22,7 @@ It is a risk-reduction wrapper, not a perfect sandbox.
 | Privilege escalation inside container | Mitigated | Drops capabilities and blocks privilege escalation. |
 | Broad env leakage | Partially mitigated | Only selected variables are passed through. |
 | Host state separation | Partially mitigated | Container state/cache is kept under a dedicated host directory. |
+| Stronger runtime isolation (sandbox backend) | Mitigated | Docker Sandboxes runs the agent inside a microVM, providing kernel-level separation beyond what a container can offer. |
 
 ## Known Accepted Risks
 
@@ -34,6 +35,7 @@ It is a risk-reduction wrapper, not a perfect sandbox.
 | Mirrored OpenCode auth by default | Accepted | Keeps host and container usage simple. |
 | Persistent container state/cache | Accepted | Avoids repeated setup and re-login on every run. |
 | Optional secure mode remains available | Accepted | Kept as a lower-integration fallback, but not made the main path to avoid adoption friction. |
+| Sandbox backend provides stronger isolation | Accepted | Available via `make run-sandbox`; adds microVM boundary for agents that need it. |
 
 ## Not Fully Solved
 
@@ -43,6 +45,17 @@ It is a risk-reduction wrapper, not a perfect sandbox.
 | Malicious repo changes | Not prevented | The workspace is intentionally writable. |
 | Credential misuse by a rogue agent | Not prevented | Some credentials are intentionally available for real workflows. |
 | Full isolation | Not provided | Docker reduces risk, but this is not a complete security boundary. |
+| Stronger isolation (microVM) | Available | Use `make run-sandbox` for Docker Sandboxes-backed isolation. |
+
+## Two Backends
+
+This project ships two backends rather than forcing one choice:
+
+- **`container` backend** (`make run`, `bin/opencode-container`): Runs against a local Docker image you build. Keeps the host integration knobs (local overrides, custom mounts) and is the best fit for daily SSH + tmux + neovim workflows. Isolation is provided by a hardened container (read-only root, dropped capabilities, no-new-privileges, tmpfs /tmp).
+
+- **`sandbox` backend** (`make run-sandbox`, `bin/opencode-sandbox`): Runs against Docker Sandboxes (`sbx`), which executes the agent inside a lightweight microVM. This provides kernel-level separation beyond what a Linux container can offer. Trades the local-override flexibility of the container backend for a cleaner runtime boundary.
+
+Both backends share the same workspace guardrails (blocks `/`, `$HOME`, and out-of-tree mounts) and the same profile model (`secure` / `native`). Use `make run` for daily work; use `make run-sandbox` when you want stronger isolation or are running untrusted agent code.
 
 ## Why We Did Not Remove More
 
