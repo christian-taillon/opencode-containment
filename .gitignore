@@ -3,6 +3,9 @@ opencode-local.sh
 
 # Generated files
 *.tmp
+demo/logs/*.log
+demo/repo/.env
+.ruff_cache/
 
 # Development artifacts
 PLAN.md

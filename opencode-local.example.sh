@@ -6,6 +6,13 @@
 #
 # This script is sourced by bin/opencode-container before docker run.
 # You can set environment variables, modify DOCKER_ARGS, or set OPENCODE_CONFIG_CONTENT.
+#
+# Security warning:
+# - never mount /var/run/docker.sock
+# - never mount / or all of $HOME
+# - never add --privileged
+# - never add --cap-add
+# - never copy .env or private key material into persistent runtime state
 
 # --- Profile & Image Defaults ---
 # export OPENCODE_PROFILE="native"

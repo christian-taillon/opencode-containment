@@ -37,6 +37,14 @@ pass_env_if_set() {
     done
 }
 
+DOCKER_ARGS=()
+
+LOCAL_HOOK="$SCRIPT_DIR/opencode-local.sh"
+if [[ -f "$LOCAL_HOOK" ]]; then
+    # shellcheck disable=SC1090
+    source "$LOCAL_HOOK"
+fi
+
 # Default values (env-overridable)
 PROFILE="${OPENCODE_PROFILE:-secure}"
 IMAGE="${OPENCODE_IMAGE:-opencode-containment:latest}"
@@ -136,7 +144,7 @@ fi
 mkdir -p "$OPENCODE_CONTAINER_HOME"/{cache,local}
 
 # Base docker run arguments
-DOCKER_ARGS=(
+DOCKER_ARGS+=(
     --rm
     --cap-drop=ALL
     --security-opt no-new-privileges:true
@@ -220,14 +228,6 @@ fi
 # GitHub CLI config
 if [[ -d "$HOME/.config/gh" ]]; then
     DOCKER_ARGS+=(--volume "$HOME/.config/gh:/home/opencode/.config/gh:ro")
-fi
-
-# Optional local hook for personal env vars, extra mounts, or config overrides.
-# Sourced after DOCKER_ARGS is initialized so the hook can append to it.
-LOCAL_HOOK="$SCRIPT_DIR/opencode-local.sh"
-if [[ -f "$LOCAL_HOOK" ]]; then
-    # shellcheck disable=SC1090
-    source "$LOCAL_HOOK"
 fi
 
 # Mirror host OpenCode auth and provider state into the container's persistent

@@ -1,0 +1,131 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+
+# Allow shared local overrides to be sourced by both launchers. Docker-specific
+# DOCKER_ARGS entries are ignored by this backend because sbx owns runtime setup.
+DOCKER_ARGS=()
+
+LOCAL_HOOK="$SCRIPT_DIR/opencode-local.sh"
+if [[ -f "$LOCAL_HOOK" ]]; then
+    # shellcheck disable=SC1090
+    source "$LOCAL_HOOK"
+fi
+
+PROFILE="${OPENCODE_PROFILE:-native}"
+WORKSPACE="${OPENCODE_WORKSPACE:-$PWD}"
+SANDBOX_NAME="${OPENCODE_SANDBOX_NAME:-}"
+SANDBOX_MEMORY="${OPENCODE_SANDBOX_MEMORY:-8g}"
+SANDBOX_CPUS="${OPENCODE_SANDBOX_CPUS:-4}"
+SANDBOX_TEMPLATE="${OPENCODE_SANDBOX_TEMPLATE:-}"
+SBX_BIN="${OPENCODE_SBX_BIN:-sbx}"
+
+show_help() {
+    cat <<EOF
+Usage: opencode-sandbox [OPTIONS] [-- ARGS...]
+
+Options:
+  --profile PROFILE   Profile label to export inside the sandbox (default: OPENCODE_PROFILE or native)
+  --workspace DIR     Workspace directory to mount (default: OPENCODE_WORKSPACE or current directory)
+  --name NAME         Sandbox name to reuse/create (default: OPENCODE_SANDBOX_NAME or auto)
+  --memory LIMIT      Sandbox memory limit passed to sbx (default: OPENCODE_SANDBOX_MEMORY or 8g)
+  --cpus COUNT        Sandbox CPU count passed to sbx (default: OPENCODE_SANDBOX_CPUS or 4)
+  --template IMAGE    Sandbox template image override
+  --help              Show this help message
+
+Notes:
+  - This wraps Docker Sandboxes (sbx) for the current workspace.
+  - sbx controls the sandbox image and writable state; unlike the Docker launcher,
+    local host mounts and overrideable docker args do not apply here.
+  - Default sandbox sizing is explicit for predictable host impact.
+  - Pass OpenCode arguments after "--".
+
+Examples:
+  opencode-sandbox
+  opencode-sandbox -- --continue
+  opencode-sandbox --memory 12g --cpus 6
+EOF
+}
+
+ARGS=()
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --profile)
+            PROFILE="$2"
+            shift 2
+            ;;
+        --workspace)
+            WORKSPACE="$2"
+            shift 2
+            ;;
+        --name)
+            SANDBOX_NAME="$2"
+            shift 2
+            ;;
+        --memory)
+            SANDBOX_MEMORY="$2"
+            shift 2
+            ;;
+        --cpus)
+            SANDBOX_CPUS="$2"
+            shift 2
+            ;;
+        --template)
+            SANDBOX_TEMPLATE="$2"
+            shift 2
+            ;;
+        --help)
+            show_help
+            exit 0
+            ;;
+        --)
+            shift
+            ARGS+=("$@")
+            break
+            ;;
+        *)
+            ARGS+=("$1")
+            shift
+            ;;
+    esac
+done
+
+if [[ ! -e "$WORKSPACE" ]]; then
+    echo "Error: Workspace path does not exist: $WORKSPACE" >&2
+    exit 1
+fi
+if [[ ! -d "$WORKSPACE" ]]; then
+    echo "Error: Workspace path is not a directory: $WORKSPACE" >&2
+    exit 1
+fi
+
+REAL_WORKSPACE="$(realpath "$WORKSPACE")"
+REAL_HOME="$(realpath "$HOME")"
+START_DIR="$(realpath "$PWD")"
+if [[ "$REAL_WORKSPACE" == "/" || "$REAL_WORKSPACE" == "$REAL_HOME" ]]; then
+    echo "Error: For security reasons, mounting '/' or '$HOME' as the workspace is not allowed." >&2
+    exit 1
+fi
+if [[ "$REAL_WORKSPACE" != "$START_DIR" && "$REAL_WORKSPACE" != "$START_DIR"/* ]]; then
+    echo "Error: Workspace must be the current directory or one of its subdirectories." >&2
+    exit 1
+fi
+
+if ! command -v "$SBX_BIN" >/dev/null 2>&1; then
+    echo "Error: sbx is not installed or not in PATH." >&2
+    echo "Hint: export PATH=\"$HOME/.docker/sbx/bin:$HOME/.docker/sbx/libexec:/usr/sbin:/sbin:\$PATH\"" >&2
+    exit 1
+fi
+
+RUN_ARGS=()
+[[ -n "$SANDBOX_NAME" ]] && RUN_ARGS+=(--name "$SANDBOX_NAME")
+[[ -n "$SANDBOX_MEMORY" ]] && RUN_ARGS+=(--memory "$SANDBOX_MEMORY")
+[[ -n "$SANDBOX_CPUS" ]] && RUN_ARGS+=(--cpus "$SANDBOX_CPUS")
+[[ -n "$SANDBOX_TEMPLATE" ]] && RUN_ARGS+=(--template "$SANDBOX_TEMPLATE")
+
+if [[ ${#ARGS[@]} -eq 0 ]]; then
+    exec env OPENCODE_PROFILE="$PROFILE" "$SBX_BIN" run "${RUN_ARGS[@]}" opencode "$WORKSPACE"
+fi
+
+exec env OPENCODE_PROFILE="$PROFILE" "$SBX_BIN" run "${RUN_ARGS[@]}" opencode "$WORKSPACE" -- "${ARGS[@]}"
