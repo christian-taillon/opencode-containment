@@ -48,9 +48,10 @@
 # [[ -n "${tc_secretkey:-}" ]] && DOCKER_ARGS+=(--env "tc_secretkey=$tc_secretkey")
 
 # --- Auth Sync ---
-# Host OpenCode auth sync is enabled by default. The launcher copies the host
-# auth/database files from ~/.local/share/opencode into the container's
-# persistent ~/.local before startup so logged-in providers show up inside.
+# Host OpenCode auth sync is enabled by default. The launcher copies host auth
+# into the container's persistent ~/.local before startup so logged-in providers
+# show up inside. The host database is copied only during first-time container
+# state initialization so container-created sessions remain resumable.
 #
 # Disable it if you want a clean container identity:
 # export OPENCODE_SYNC_HOST_AUTH=0

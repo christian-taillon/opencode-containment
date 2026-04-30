@@ -53,12 +53,14 @@ If an extra package name is wrong or unavailable, the build fails with a clear m
 
 By default, the launcher mirrors key host OpenCode state from `~/.local/share/opencode` into the container's persistent `~/.local/share/opencode` before startup. This keeps `opencode login` state and provider visibility aligned between the host and the containment environment.
 
+`auth.json` is refreshed on each launch. The database files are copied only when the container state does not already have `opencode.db`, which prevents sessions created inside the container from being overwritten before `opencode-container -s <session-id>` can resume them.
+
 Mirrored files:
 
 - `auth.json`
-- `opencode.db`
-- `opencode.db-shm`
-- `opencode.db-wal`
+- `opencode.db` during first-time initialization only
+- `opencode.db-shm` during first-time initialization only
+- `opencode.db-wal` during first-time initialization only
 
 Useful overrides in `opencode-local.sh`:
 

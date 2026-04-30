@@ -230,22 +230,26 @@ if [[ -d "$HOME/.config/gh" ]]; then
     DOCKER_ARGS+=(--volume "$HOME/.config/gh:/home/opencode/.config/gh:ro")
 fi
 
-# Mirror host OpenCode auth and provider state into the container's persistent
-# local state so `opencode login` on the host remains visible in containment.
+# Mirror host OpenCode auth into the container's persistent local state so
+# `opencode login` on the host remains visible in containment. Copy the host
+# database only for first-time initialization; replacing it on every launch
+# would delete sessions created inside the container before `-s` can resume them.
 if [[ "$OPENCODE_SYNC_HOST_AUTH" != "0" && -d "$OPENCODE_HOST_STATE_DIR" ]]; then
     CONTAINER_OPENCODE_STATE="$OPENCODE_CONTAINER_HOME/local/share/opencode"
     mkdir -p "$CONTAINER_OPENCODE_STATE"
 
-    for host_file in \
-        "$OPENCODE_HOST_STATE_DIR/auth.json" \
-        "$OPENCODE_HOST_STATE_DIR/opencode.db" \
-        "$OPENCODE_HOST_STATE_DIR/opencode.db-shm" \
-        "$OPENCODE_HOST_STATE_DIR/opencode.db-wal"
-    do
-        if [[ -f "$host_file" ]]; then
-            cp -f "$host_file" "$CONTAINER_OPENCODE_STATE/"
-        fi
-    done
+    if [[ -f "$OPENCODE_HOST_STATE_DIR/auth.json" ]]; then
+        cp -f "$OPENCODE_HOST_STATE_DIR/auth.json" "$CONTAINER_OPENCODE_STATE/"
+    fi
+
+    if [[ ! -f "$CONTAINER_OPENCODE_STATE/opencode.db" && -f "$OPENCODE_HOST_STATE_DIR/opencode.db" ]]; then
+        cp -f "$OPENCODE_HOST_STATE_DIR/opencode.db" "$CONTAINER_OPENCODE_STATE/"
+        for db_sidecar in opencode.db-shm opencode.db-wal; do
+            if [[ -f "$OPENCODE_HOST_STATE_DIR/$db_sidecar" ]]; then
+                cp -f "$OPENCODE_HOST_STATE_DIR/$db_sidecar" "$CONTAINER_OPENCODE_STATE/"
+            fi
+        done
+    fi
 fi
 
 # Load config overrides with precedence:
