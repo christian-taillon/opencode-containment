@@ -86,6 +86,14 @@ Host OpenCode auth from `~/.local/share/opencode` is mirrored into the container
 
 If you are behind a proxy or need an internal CA bundle, set the standard proxy variables in your shell or `opencode-local.sh` before `make build` / `make run`. They are only passed through when explicitly set.
 
+To refresh an existing installation, run:
+
+```bash
+make update
+```
+
+`make update` pulls the latest base image, rebuilds without Docker cache so package-manager installs and Rust stable are refreshed, and re-runs `make setup` without deleting existing container state. Pinned downloads such as `uv` and `marksman` only change when their Dockerfile version and checksum arguments are updated.
+
 ## Runtime Modes
 
 This project is designed around one main path for daily use:
@@ -251,6 +259,7 @@ See `docs/local-overrides.md` for local override layering and examples.
 ## Makefile Targets
 
 - `make build`: Build the Docker image
+- `make update`: Pull the base image and rebuild without Docker cache
 - `make setup`: Create necessary persistent directories
 - `make doctor`: Verify prerequisites and setup
 - `make doctor-sandbox`: Verify Docker Sandboxes prerequisites and host runtime access

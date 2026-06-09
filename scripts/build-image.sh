@@ -18,6 +18,10 @@ if [[ -f "$LOCAL_HOOK" ]]; then
     source "$LOCAL_HOOK"
 fi
 
+if [[ "${OPENCODE_BUILD_NO_CACHE:-}" == "1" || "${OPENCODE_BUILD_NO_CACHE:-}" == "true" ]]; then
+    DOCKER_BUILD_ARGS+=(--no-cache)
+fi
+
 add_build_arg_if_set HTTP_PROXY
 add_build_arg_if_set HTTPS_PROXY
 add_build_arg_if_set ALL_PROXY

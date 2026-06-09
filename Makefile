@@ -1,4 +1,4 @@
-.PHONY: help build setup run run-native run-secure run-sandbox doctor doctor-sandbox clean clean-sandbox-smoke shell-install
+.PHONY: help build update setup run run-native run-secure run-sandbox doctor doctor-sandbox clean clean-sandbox-smoke shell-install
 
 # Project variables
 PROJECT_NAME := opencode-containment
@@ -13,6 +13,10 @@ help: ## Show all targets with descriptions
 
 build: ## Build the Docker image as opencode-containment:latest
 	IMAGE_NAME=$(IMAGE_NAME) bash scripts/build-image.sh
+
+update: ## Pull base image and rebuild without cache, then ensure local state dirs exist
+	OPENCODE_BUILD_NO_CACHE=1 IMAGE_NAME=$(IMAGE_NAME) bash scripts/build-image.sh
+	@$(MAKE) setup
 
 setup: ## Create persistent directories for container cache/state
 	@echo "Running setup..."
