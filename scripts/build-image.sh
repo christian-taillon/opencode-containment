@@ -31,6 +31,12 @@ add_build_arg_if_set https_proxy
 add_build_arg_if_set all_proxy
 add_build_arg_if_set no_proxy
 add_build_arg_if_set NODE_EXTRA_CA_CERTS
+add_build_arg_if_set RUST_TOOLCHAIN
+add_build_arg_if_set UV_VERSION
+add_build_arg_if_set UV_INSTALLER_SHA256
+add_build_arg_if_set MARKSMAN_VERSION
+add_build_arg_if_set MARKSMAN_SHA256_X86_64
+add_build_arg_if_set MARKSMAN_SHA256_AARCH64
 
 if [[ -n "${OPENCODE_BUILD_EXTRA_APK_PACKAGES:-}" && -z "${EXTRA_APK_PACKAGES:-}" ]]; then
     DOCKER_BUILD_ARGS+=(--build-arg "EXTRA_APK_PACKAGES=${OPENCODE_BUILD_EXTRA_APK_PACKAGES}")

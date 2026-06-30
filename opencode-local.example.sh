@@ -31,6 +31,16 @@
 # Add local-only packages during `make build` without committing Dockerfile changes.
 # export OPENCODE_BUILD_EXTRA_APK_PACKAGES="htop sqlite"
 
+# --- Optional Build Version Pins ---
+# Defaults intentionally follow latest/stable. Set these only when you want a
+# reproducible or audited local build.
+# export RUST_TOOLCHAIN="1.88.0"
+# export UV_VERSION="0.11.25"
+# export UV_INSTALLER_SHA256="<installer-sha256>"
+# export MARKSMAN_VERSION="2026-02-08"
+# export MARKSMAN_SHA256_X86_64="<linux-musl-x64-sha256>"
+# export MARKSMAN_SHA256_AARCH64="<linux-musl-arm64-sha256>"
+
 # --- OpenCode Config Override (JSON) ---
 # Set this to pass custom config into the container:
 # export OPENCODE_CONFIG_CONTENT='{"agent":{}}'

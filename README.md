@@ -45,7 +45,7 @@ Run OpenCode from SSH + tmux + neovim with a native workflow, while keeping stro
 
 ## Quick Start
 
-1. Clone the repository:
+1. Clone and enter the repository:
    ```bash
    git clone https://github.com/christian-taillon/opencode-containment.git
    cd opencode-containment
@@ -53,33 +53,39 @@ Run OpenCode from SSH + tmux + neovim with a native workflow, while keeping stro
 2. Build the image and create local state directories:
     ```bash
     ./install.sh
-    # or manually:
-    # make build
-    # make setup
     ```
-3. Run the native profile:
+3. Start OpenCode in the contained native workflow:
     ```bash
     make run
-    # or directly: bin/opencode-container --profile native
     ```
-4. Pass OpenCode subcommands directly through the launcher:
+
+That is the normal path. The workspace is your current project directory, mounted read-write at `/workspace`; host config mounts stay read-only, and OpenCode auth is copied into isolated container state.
+
+Useful follow-ups:
+
+```bash
+make doctor      # check Docker/image/auth setup
+make update      # pull latest upstream pieces and rebuild
+make run-secure  # lower-integration container profile
+```
+
+You can also pass OpenCode subcommands directly through the launcher:
+
     ```bash
     opencode-container auth ls
     opencode-container models --refresh
     ```
-    Use `--` only when you want to run a raw command in the container:
+
+Use `--` only when you want to run a raw command in the container:
+
     ```bash
     opencode-container -- bash
     ```
-5. Optional: run the `sandbox` backend instead:
+
+Optional: run the `sandbox` backend instead:
+
    ```bash
    make run-sandbox
-   # or directly: bin/opencode-sandbox --profile native
-   ```
-6. Optional: verify your environment:
-   ```bash
-   make doctor
-   make doctor-sandbox
    ```
 
 Host OpenCode auth from `~/.local/share/opencode` is mirrored into the container's persistent state automatically, so providers you have already logged into on the host should appear inside `make run` without extra setup. The host database is copied only during first-time container state initialization so container-created sessions remain resumable with `opencode-container -s <session-id>`.
@@ -92,7 +98,9 @@ To refresh an existing installation, run:
 make update
 ```
 
-`make update` pulls the latest base image, rebuilds without Docker cache so package-manager installs and Rust stable are refreshed, and re-runs `make setup` without deleting existing container state. Pinned downloads such as `uv` and `marksman` only change when their Dockerfile version and checksum arguments are updated.
+`make update` pulls the latest base image, rebuilds without Docker cache so package-manager installs, Rust stable, `uv`, and `marksman` are refreshed, and re-runs `make setup` without deleting existing container state.
+
+By default, this repo intentionally follows current upstream tooling: `ghcr.io/anomalyco/opencode:latest`, Rust `stable`, latest `uv`, latest `marksman`, and current Alpine packages from the base image repositories. If you need reproducible builds, pin the build args described in [Version Strategy](#version-strategy).
 
 ## Runtime Modes
 
@@ -179,6 +187,7 @@ You can customize the environment with environment variables or a local override
 - Standard proxy env vars (`HTTP_PROXY`, `HTTPS_PROXY`, `ALL_PROXY`, `NO_PROXY`, lowercase variants) are passed through for both runtime and `make build` when set.
 - `NODE_EXTRA_CA_CERTS`: Optional custom CA bundle path passed through for runtime and builds when set.
 - `OPENCODE_BUILD_EXTRA_APK_PACKAGES`: Optional local-only extra Alpine packages to install during `make build`.
+- Build pin overrides: `RUST_TOOLCHAIN`, `UV_VERSION`, `UV_INSTALLER_SHA256`, `MARKSMAN_VERSION`, `MARKSMAN_SHA256_X86_64`, and `MARKSMAN_SHA256_AARCH64` can be set in `opencode-local.sh` before `make build`.
 - `OPENCODE_SBX_BIN`: Override the `sbx` binary path for `bin/opencode-sandbox`.
 - `OPENCODE_SANDBOX_NAME`: Reuse or create a named sandbox.
 - `OPENCODE_SANDBOX_MEMORY`: Pass a memory limit to `sbx run` (default: `8g`).
@@ -274,6 +283,31 @@ See `docs/local-overrides.md` for local override layering and examples.
 ## Customization
 
 To add personal packages without committing Dockerfile changes, set `OPENCODE_BUILD_EXTRA_APK_PACKAGES` in `opencode-local.sh` and rebuild with `make build`. For shared base-image changes, edit the `Dockerfile`. To adjust mounts or security settings, update `bin/opencode-container`.
+
+## Version Strategy
+
+The committed defaults favor freshness over bit-for-bit reproducibility:
+
+- OpenCode base image: `ghcr.io/anomalyco/opencode:latest`
+- Rust: `stable`
+- `uv`: latest installer
+- `marksman`: latest GitHub release
+- Alpine packages: current packages available from the base image repositories at build time
+
+For most personal use, run `make update` periodically. It pulls the latest base image, rebuilds without cache, refreshes package-manager installs, and preserves existing container state.
+
+For reproducible or audited builds, pin versions locally in `opencode-local.sh` before running `make build`:
+
+```bash
+export RUST_TOOLCHAIN="1.88.0"
+export UV_VERSION="0.11.25"
+export UV_INSTALLER_SHA256="<installer-sha256>"
+export MARKSMAN_VERSION="2026-02-08"
+export MARKSMAN_SHA256_X86_64="<linux-musl-x64-sha256>"
+export MARKSMAN_SHA256_AARCH64="<linux-musl-arm64-sha256>"
+```
+
+Leave checksum variables empty only when you intentionally want floating latest downloads.
 
 ## Prerequisites
 

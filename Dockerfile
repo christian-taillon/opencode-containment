@@ -1,5 +1,5 @@
-# Base image: Alpine Linux-based OpenCode
-FROM ghcr.io/anomalyco/opencode
+# Base image: Alpine Linux-based OpenCode. Defaults intentionally follow latest.
+FROM ghcr.io/anomalyco/opencode:latest
 
 USER root
 
@@ -21,11 +21,11 @@ ARG no_proxy
 ARG NODE_EXTRA_CA_CERTS
 ARG EXTRA_APK_PACKAGES=
 ARG OPENCODE_BUILD_EXTRA_APK_PACKAGES=
-ARG UV_VERSION=0.11.0
-ARG UV_INSTALLER_SHA256=90a46cecbc558ed0a50e50cc0b5775fba8346f362e67ed8da7daf0018261048d
-ARG MARKSMAN_VERSION=2026-02-08
-ARG MARKSMAN_SHA256_X86_64=d33df4544bb1f9f1b93b862ea78375ca8c04cd467ed2bcee354d605fc483ceee
-ARG MARKSMAN_SHA256_AARCH64=cd3b91b630042cc09b20505583203f875fbb4bf2fdf74dd6d87fddc3238d2798
+ARG UV_VERSION=latest
+ARG UV_INSTALLER_SHA256=
+ARG MARKSMAN_VERSION=latest
+ARG MARKSMAN_SHA256_X86_64=
+ARG MARKSMAN_SHA256_AARCH64=
 
 # Environment variables
 ENV UV_INSTALL_DIR=/usr/local/bin
@@ -94,8 +94,15 @@ RUN ln -sf /usr/bin/python3 /usr/bin/python
 
 # Install uv (Python package manager)
 RUN set -eu; \
-    curl -fsSL "https://astral.sh/uv/${UV_VERSION}/install.sh" -o /tmp/uv-installer.sh; \
-    echo "${UV_INSTALLER_SHA256}  /tmp/uv-installer.sh" | sha256sum -c -; \
+    if [ "${UV_VERSION}" = "latest" ]; then \
+        UV_INSTALLER_URL="https://astral.sh/uv/install.sh"; \
+    else \
+        UV_INSTALLER_URL="https://astral.sh/uv/${UV_VERSION}/install.sh"; \
+    fi; \
+    curl -fsSL "${UV_INSTALLER_URL}" -o /tmp/uv-installer.sh; \
+    if [ -n "${UV_INSTALLER_SHA256}" ]; then \
+        echo "${UV_INSTALLER_SHA256}  /tmp/uv-installer.sh" | sha256sum -c -; \
+    fi; \
     sh /tmp/uv-installer.sh; \
     rm -f /tmp/uv-installer.sh
 
@@ -123,9 +130,16 @@ RUN set -eu; \
             exit 1; \
             ;; \
     esac; \
-    curl -fsSL "https://github.com/artempyanykh/marksman/releases/download/${MARKSMAN_VERSION}/marksman-${MARKSMAN_ARCH}" \
+    if [ "${MARKSMAN_VERSION}" = "latest" ]; then \
+        MARKSMAN_URL="https://github.com/artempyanykh/marksman/releases/latest/download/marksman-${MARKSMAN_ARCH}"; \
+    else \
+        MARKSMAN_URL="https://github.com/artempyanykh/marksman/releases/download/${MARKSMAN_VERSION}/marksman-${MARKSMAN_ARCH}"; \
+    fi; \
+    curl -fsSL "${MARKSMAN_URL}" \
         -o /usr/local/bin/marksman; \
-    echo "${MARKSMAN_SHA256}  /usr/local/bin/marksman" | sha256sum -c -; \
+    if [ -n "${MARKSMAN_SHA256}" ]; then \
+        echo "${MARKSMAN_SHA256}  /usr/local/bin/marksman" | sha256sum -c -; \
+    fi; \
     chmod +x /usr/local/bin/marksman
 
 # Install nvim wrapper to ensure runtimepath is set correctly
