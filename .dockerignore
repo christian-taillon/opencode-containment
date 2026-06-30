@@ -1,0 +1,39 @@
+# Git and GitHub metadata are not needed for image builds.
+.git
+.github
+
+# Local-only overrides and secrets.
+opencode-local.sh
+**/.env
+**/.env.*
+!**/.env.example
+
+# Generated local artifacts.
+.ruff_cache/
+demo/logs/*.log
+*.tmp
+
+# Local planning/report files ignored by git.
+PLAN.md
+REPORT.md
+IDEAS.md
+
+# Editor and OS noise.
+.DS_Store
+Thumbs.db
+*.swp
+*.swo
+*~
+.vscode/
+.idea/
+
+# The Dockerfile only needs scripts copied into the image.
+docs/
+demo/
+config/
+LICENSE
+README.md
+SECURITY_REPORT.md
+Makefile
+install.sh
+opencode-local.example.sh

@@ -1,0 +1,61 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  security-events: write
+
+jobs:
+  build:
+    name: Build and Scan
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Check shell syntax
+        run: |
+          bash -n \
+            install.sh \
+            bin/opencode-container \
+            bin/opencode-sandbox \
+            scripts/build-image.sh \
+            scripts/container-init.sh \
+            demo/run-demo.sh \
+            demo/clean.sh \
+            demo/listener.sh \
+            demo/fake-env.sh
+
+      - name: Build image
+        env:
+          IMAGE_NAME: opencode-containment:ci
+        run: bash scripts/build-image.sh
+
+      - name: Smoke test image tools
+        run: |
+          docker run --rm --entrypoint uv opencode-containment:ci --version
+          docker run --rm --entrypoint rustc opencode-containment:ci --version
+          docker run --rm --entrypoint marksman opencode-containment:ci --version
+          docker run --rm --entrypoint opencode opencode-containment:ci --version
+
+      - name: Scan image with Trivy
+        uses: aquasecurity/trivy-action@0.31.0
+        with:
+          image-ref: opencode-containment:ci
+          format: sarif
+          output: trivy-results.sarif
+          vuln-type: os,library
+          severity: CRITICAL,HIGH
+          ignore-unfixed: true
+
+      - name: Upload Trivy SARIF
+        uses: github/codeql-action/upload-sarif@v3
+        if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+        with:
+          sarif_file: trivy-results.sarif
