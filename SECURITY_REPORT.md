@@ -1,5 +1,11 @@
 # Security Report
 
+## Purpose
+
+The goal of this project is to reduce the blast radius of developer and agentic processes by adding isolation and boundaries around the interactive harness itself.
+
+This project is not an agent permission or policy system. Agent permissions, model/tool configuration, and approval rules are handled elsewhere. The focus here is runtime containment for a human-operated development workflow: preserve the normal interactive experience while reducing unnecessary access to the host, credentials, and filesystem state where practical.
+
 ## Usability First
 
 If this environment is too restrictive, developers will not use it.

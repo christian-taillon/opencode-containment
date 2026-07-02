@@ -1,6 +1,9 @@
 # Local-only override (never commit)
 opencode-local.sh
 
+# Local opencode config (personal permission grants, never commit)
+opencode.json
+
 # Generated files
 *.tmp
 demo/logs/*.log
