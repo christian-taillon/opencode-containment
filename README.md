@@ -31,7 +31,7 @@ Run OpenCode from SSH + tmux + neovim with a native workflow, while keeping stro
 - Read-only container root with explicit writable paths only
 - Workspace guardrails to block unsafe mounts
 - Read-only host config mounts + SSH agent forwarding (no key mounts)
-- Host `opencode login` state mirrored into containment by default
+- Host `opencode login` auth mirrored into containment by default
 - One local-only override hook for personal config, mounts, and auth behavior
 - Optional proxy and custom CA passthrough for build/run environments
 - Local-only extra Alpine packages during builds without adding a new config system
@@ -89,6 +89,8 @@ Optional: run the `sandbox` backend instead:
    ```
 
 Host OpenCode auth from `~/.local/share/opencode` is mirrored into the container's persistent state automatically, so providers you have already logged into on the host should appear inside `make run` without extra setup. The host database is copied only during first-time container state initialization so container-created sessions remain resumable with `opencode-container -s <session-id>`.
+
+For the sandbox backend, host OpenCode config is mounted read-only and host auth is copied into a sandbox-specific read-only auth mirror. Sandbox sessions and `opencode.db` remain sandbox-local, so native, container, and sandbox usage do not overwrite each other's session databases.
 
 If you are behind a proxy or need an internal CA bundle, set the standard proxy variables in your shell or `opencode-local.sh` before `make build` / `make run`. They are only passed through when explicitly set.
 
@@ -193,6 +195,9 @@ You can customize the environment with environment variables or a local override
 - `OPENCODE_SANDBOX_MEMORY`: Pass a memory limit to `sbx run` (default: `8g`).
 - `OPENCODE_SANDBOX_CPUS`: Pass a CPU count to `sbx run` (default: `4`).
 - `OPENCODE_SANDBOX_TEMPLATE`: Override the sandbox template image.
+- `OPENCODE_CONFIG_DIR`: Host OpenCode config directory mounted read-only into sandbox (default: `$HOME/.config/opencode`).
+- `OPENCODE_HOST_STATE_DIR`: Host OpenCode state directory used as the auth source (default: `$HOME/.local/share/opencode`).
+- `OPENCODE_SANDBOX_STATE_DIR`: Host directory for sandbox support files such as the auth mirror (default: `$HOME/.local/share/opencode-sandbox`).
 
 For local customization, copy the tracked example file and keep your personal changes in `opencode-local.sh`:
 
@@ -202,7 +207,7 @@ cp opencode-local.example.sh opencode-local.sh
 
 `bin/opencode-container` sources `opencode-local.sh` before `docker run`, so you can set default profiles, pass JSON config, add mounts or env vars, and sync local auth into the persistent container state without committing any of it.
 
-`bin/opencode-sandbox` also sources `opencode-local.sh`, but only environment-style settings apply there. Docker-specific `DOCKER_ARGS` customizations do not carry over because `sbx` owns the sandbox runtime and mount model.
+`bin/opencode-sandbox` also sources `opencode-local.sh`, but only environment-style settings apply there. Docker-specific `DOCKER_ARGS` customizations do not carry over because `sbx` owns the sandbox runtime and mount model. Host OpenCode config is readable inside the sandbox by design; keep secrets out of committed or shared config files.
 
 `make build` also sources `opencode-local.sh` for proxy/CA and extra APK package overrides. That keeps one local override flow for both runtime and build behavior.
 
@@ -252,8 +257,13 @@ Quick checks:
 
 ```bash
 make doctor-sandbox
+make setup-sandbox-policy
 bin/opencode-sandbox -- --continue
 ```
+
+The sandbox backend uses Docker Sandboxes' network policy. Project-managed allowlist entries live in `config/sbx-network-allow.txt`; apply missing entries with `make setup-sandbox-policy`. Add MCP or provider domains there narrowly, for example `api.example.com:443`, instead of allowing all outbound traffic.
+
+`make update` rebuilds only the local Docker image used by the container backend. Docker Sandboxes uses its own agent templates, and existing named sandboxes keep their filesystem layer until you remove or recreate them.
 
 If `sbx` fails to start, check `sbx daemon status`, confirm `/dev/kvm` access, and verify both `mkfs.ext4` and `mkfs.erofs` resolve in your PATH.
 
@@ -272,6 +282,7 @@ See `docs/local-overrides.md` for local override layering and examples.
 - `make setup`: Create necessary persistent directories
 - `make doctor`: Verify prerequisites and setup
 - `make doctor-sandbox`: Verify Docker Sandboxes prerequisites and host runtime access
+- `make setup-sandbox-policy`: Apply project Docker Sandboxes network allowlist entries
 - `make run`: Run the container interactively (native profile)
 - `make run-native`: Run the container interactively (native profile)
 - `make run-secure`: Run the container with the secure profile

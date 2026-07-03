@@ -4,8 +4,9 @@
 # Copy to `opencode-local.sh` and customize.
 # This file is gitignored - personal settings stay local.
 #
-# This script is sourced by bin/opencode-container before docker run.
-# You can set environment variables, modify DOCKER_ARGS, or set OPENCODE_CONFIG_CONTENT.
+# This script is sourced by bin/opencode-container and bin/opencode-sandbox.
+# You can set environment variables, modify DOCKER_ARGS for the container backend,
+# or set OPENCODE_CONFIG_CONTENT.
 #
 # Security warning:
 # - never mount /var/run/docker.sock
@@ -59,12 +60,16 @@
 
 # --- Auth Sync ---
 # Host OpenCode auth sync is enabled by default. The launcher copies host auth
-# into the container's persistent ~/.local before startup so logged-in providers
-# show up inside. The host database is copied only during first-time container
-# state initialization so container-created sessions remain resumable.
+# into contained runtime state before startup so logged-in providers show up
+# inside. The container backend also seeds the host database only during
+# first-time state initialization so container-created sessions remain resumable.
+# The sandbox backend mirrors auth only; it does not seed opencode.db.
 #
 # Disable it if you want a clean container identity:
 # export OPENCODE_SYNC_HOST_AUTH=0
 #
 # Or point at a different host state directory:
 # export OPENCODE_HOST_STATE_DIR="$HOME/.local/share/opencode"
+
+# Sandbox-only support files, including the read-only auth mirror:
+# export OPENCODE_SANDBOX_STATE_DIR="$HOME/.local/share/opencode-sandbox"

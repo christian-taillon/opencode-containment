@@ -3,6 +3,44 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
+resolve_path() {
+    local target="$1"
+
+    if command -v realpath >/dev/null 2>&1; then
+        realpath "$target"
+        return
+    fi
+
+    if [[ -d "$target" ]]; then
+        (
+            cd "$target"
+            pwd -P
+        )
+        return
+    fi
+
+    local dir base
+    dir="$(dirname "$target")"
+    base="$(basename "$target")"
+    (
+        cd "$dir"
+        printf '%s/%s\n' "$(pwd -P)" "$base"
+    )
+}
+
+sanitize_sandbox_name() {
+    local raw="$1"
+    local sanitized
+
+    sanitized="$(printf '%s' "$raw" | tr '[:upper:]' '[:lower:]' | tr -cs '[:alnum:].+-' '-')"
+    sanitized="${sanitized#-}"
+    sanitized="${sanitized%-}"
+    if [[ -z "$sanitized" ]]; then
+        sanitized="workspace"
+    fi
+    printf '%s' "$sanitized"
+}
+
 # Allow shared local overrides to be sourced by both launchers. Docker-specific
 # DOCKER_ARGS entries are ignored by this backend because sbx owns runtime setup.
 DOCKER_ARGS=()
@@ -20,6 +58,10 @@ SANDBOX_MEMORY="${OPENCODE_SANDBOX_MEMORY:-8g}"
 SANDBOX_CPUS="${OPENCODE_SANDBOX_CPUS:-4}"
 SANDBOX_TEMPLATE="${OPENCODE_SANDBOX_TEMPLATE:-}"
 SBX_BIN="${OPENCODE_SBX_BIN:-sbx}"
+OPENCODE_CONFIG_DIR="${OPENCODE_CONFIG_DIR:-$HOME/.config/opencode}"
+OPENCODE_HOST_STATE_DIR="${OPENCODE_HOST_STATE_DIR:-$HOME/.local/share/opencode}"
+OPENCODE_SANDBOX_STATE_DIR="${OPENCODE_SANDBOX_STATE_DIR:-$HOME/.local/share/opencode-sandbox}"
+OPENCODE_SYNC_HOST_AUTH="${OPENCODE_SYNC_HOST_AUTH:-1}"
 
 show_help() {
     cat <<EOF
@@ -33,6 +75,14 @@ Options:
   --cpus COUNT        Sandbox CPU count passed to sbx (default: OPENCODE_SANDBOX_CPUS or 4)
   --template IMAGE    Sandbox template image override
   --help              Show this help message
+
+State sharing:
+  - Host OpenCode config is mounted read-only when present:
+      ${OPENCODE_CONFIG_DIR}
+  - Host OpenCode auth is copied to a sandbox auth mirror and mounted read-only:
+      ${OPENCODE_SANDBOX_STATE_DIR}/auth/auth.json
+  - OpenCode sessions/database remain sandbox-local; opencode.db is not seeded
+    from native state.
 
 Notes:
   - This wraps Docker Sandboxes (sbx) for the current workspace.
@@ -100,9 +150,9 @@ if [[ ! -d "$WORKSPACE" ]]; then
     exit 1
 fi
 
-REAL_WORKSPACE="$(realpath "$WORKSPACE")"
-REAL_HOME="$(realpath "$HOME")"
-START_DIR="$(realpath "$PWD")"
+REAL_WORKSPACE="$(resolve_path "$WORKSPACE")"
+REAL_HOME="$(resolve_path "$HOME")"
+START_DIR="$(resolve_path "$PWD")"
 if [[ "$REAL_WORKSPACE" == "/" || "$REAL_WORKSPACE" == "$REAL_HOME" ]]; then
     echo "Error: For security reasons, mounting '/' or '$HOME' as the workspace is not allowed." >&2
     exit 1
@@ -112,20 +162,95 @@ if [[ "$REAL_WORKSPACE" != "$START_DIR" && "$REAL_WORKSPACE" != "$START_DIR"/* ]
     exit 1
 fi
 
+if [[ -z "$SANDBOX_NAME" ]]; then
+    SANDBOX_NAME="opencode-$(sanitize_sandbox_name "$(basename "$REAL_WORKSPACE")")"
+fi
+
 if ! command -v "$SBX_BIN" >/dev/null 2>&1; then
     echo "Error: sbx is not installed or not in PATH." >&2
     echo "Hint: export PATH=\"$HOME/.docker/sbx/bin:$HOME/.docker/sbx/libexec:/usr/sbin:/sbin:\$PATH\"" >&2
     exit 1
 fi
 
-RUN_ARGS=()
-[[ -n "$SANDBOX_NAME" ]] && RUN_ARGS+=(--name "$SANDBOX_NAME")
-[[ -n "$SANDBOX_MEMORY" ]] && RUN_ARGS+=(--memory "$SANDBOX_MEMORY")
-[[ -n "$SANDBOX_CPUS" ]] && RUN_ARGS+=(--cpus "$SANDBOX_CPUS")
-[[ -n "$SANDBOX_TEMPLATE" ]] && RUN_ARGS+=(--template "$SANDBOX_TEMPLATE")
-
-if [[ ${#ARGS[@]} -eq 0 ]]; then
-    exec env OPENCODE_PROFILE="$PROFILE" "$SBX_BIN" run "${RUN_ARGS[@]}" opencode "$WORKSPACE"
+AUTH_MIRROR_DIR="$OPENCODE_SANDBOX_STATE_DIR/auth"
+if [[ "$OPENCODE_SYNC_HOST_AUTH" != "0" && -f "$OPENCODE_HOST_STATE_DIR/auth.json" ]]; then
+    mkdir -p "$AUTH_MIRROR_DIR"
+    cp -f "$OPENCODE_HOST_STATE_DIR/auth.json" "$AUTH_MIRROR_DIR/auth.json"
+    chmod 600 "$AUTH_MIRROR_DIR/auth.json"
 fi
 
-exec env OPENCODE_PROFILE="$PROFILE" "$SBX_BIN" run "${RUN_ARGS[@]}" opencode "$WORKSPACE" -- "${ARGS[@]}"
+CREATE_ARGS=(--name "$SANDBOX_NAME")
+[[ -n "$SANDBOX_MEMORY" ]] && CREATE_ARGS+=(--memory "$SANDBOX_MEMORY")
+[[ -n "$SANDBOX_CPUS" ]] && CREATE_ARGS+=(--cpus "$SANDBOX_CPUS")
+[[ -n "$SANDBOX_TEMPLATE" ]] && CREATE_ARGS+=(--template "$SANDBOX_TEMPLATE")
+
+EXTRA_WORKSPACES=()
+if [[ -d "$OPENCODE_CONFIG_DIR" ]]; then
+    REAL_OPENCODE_CONFIG_DIR="$(resolve_path "$OPENCODE_CONFIG_DIR")"
+    EXTRA_WORKSPACES+=("$REAL_OPENCODE_CONFIG_DIR:ro")
+else
+    REAL_OPENCODE_CONFIG_DIR=""
+fi
+
+SANDBOX_OPENCODE_HOME="/home/agent"
+if [[ -n "$REAL_OPENCODE_CONFIG_DIR" && "$REAL_OPENCODE_CONFIG_DIR" == */.config/opencode ]]; then
+    SANDBOX_OPENCODE_HOME="${REAL_OPENCODE_CONFIG_DIR%/.config/opencode}"
+fi
+
+if [[ "$OPENCODE_SYNC_HOST_AUTH" != "0" && -f "$AUTH_MIRROR_DIR/auth.json" ]]; then
+    REAL_AUTH_MIRROR_DIR="$(resolve_path "$AUTH_MIRROR_DIR")"
+    EXTRA_WORKSPACES+=("$REAL_AUTH_MIRROR_DIR:ro")
+else
+    REAL_AUTH_MIRROR_DIR=""
+fi
+
+if ! "$SBX_BIN" ls -q 2>/dev/null | grep -Fxq "$SANDBOX_NAME"; then
+    "$SBX_BIN" create "${CREATE_ARGS[@]}" opencode "$REAL_WORKSPACE" "${EXTRA_WORKSPACES[@]}"
+fi
+
+BOOTSTRAP_SCRIPT='set -eu
+mkdir -p "$HOME/.config" "$HOME/.local/share/opencode"
+
+if [ -n "${OPENCODE_HOST_CONFIG:-}" ]; then
+    if [ ! -d "$OPENCODE_HOST_CONFIG" ]; then
+        echo "Warning: host OpenCode config is not mounted in sandbox; recreate $SANDBOX_NAME to enable read-only config sharing." >&2
+    fi
+fi
+
+if [ "${OPENCODE_AUTH_SYNC:-1}" = "0" ]; then
+    if [ -L "$HOME/.local/share/opencode/auth.json" ]; then
+        rm -f "$HOME/.local/share/opencode/auth.json"
+    fi
+elif [ -n "${OPENCODE_AUTH_MIRROR:-}" ]; then
+    if [ -f "$OPENCODE_AUTH_MIRROR" ]; then
+        if [ ! -L "$HOME/.local/share/opencode/auth.json" ] || [ "$(readlink "$HOME/.local/share/opencode/auth.json" 2>/dev/null || true)" != "$OPENCODE_AUTH_MIRROR" ]; then
+            rm -f "$HOME/.local/share/opencode/auth.json"
+            ln -s "$OPENCODE_AUTH_MIRROR" "$HOME/.local/share/opencode/auth.json"
+        fi
+    else
+        echo "Warning: host OpenCode auth mirror is not mounted in sandbox; recreate $SANDBOX_NAME to enable read-only auth sharing." >&2
+    fi
+fi'
+
+"$SBX_BIN" exec \
+    -e "SANDBOX_NAME=$SANDBOX_NAME" \
+    -e "OPENCODE_HOST_CONFIG=$REAL_OPENCODE_CONFIG_DIR" \
+    -e "OPENCODE_AUTH_SYNC=$OPENCODE_SYNC_HOST_AUTH" \
+    -e "OPENCODE_AUTH_MIRROR=${REAL_AUTH_MIRROR_DIR:+$REAL_AUTH_MIRROR_DIR/auth.json}" \
+    "$SANDBOX_NAME" sh -lc "$BOOTSTRAP_SCRIPT"
+
+EXEC_ARGS=(
+    -e "OPENCODE_PROFILE=$PROFILE"
+    -e "HOME=$SANDBOX_OPENCODE_HOME"
+    -e "XDG_CONFIG_HOME=$SANDBOX_OPENCODE_HOME/.config"
+    -e "XDG_DATA_HOME=/home/agent/.local/share"
+    -e "XDG_CACHE_HOME=/home/agent/.cache"
+    -e "XDG_STATE_HOME=/home/agent/.local/state"
+    -w "$REAL_WORKSPACE"
+)
+
+if [[ -t 0 && -t 1 ]]; then
+    EXEC_ARGS+=(-i -t)
+fi
+
+exec "$SBX_BIN" exec "${EXEC_ARGS[@]}" "$SANDBOX_NAME" opencode "${ARGS[@]}"

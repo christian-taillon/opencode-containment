@@ -1,0 +1,7 @@
+# Project-managed Docker Sandboxes network allowlist.
+# One resource per line. Supports exact hosts, wildcard subdomains, and ports.
+# Apply with: make setup-sandbox-policy
+
+# Ollama Cloud provider
+ollama.com:443
+*.ollama.com:443

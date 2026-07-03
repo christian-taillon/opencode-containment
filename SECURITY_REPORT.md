@@ -38,7 +38,7 @@ It is a risk-reduction wrapper, not a perfect sandbox.
 | SSH agent forwarding | Accepted | Needed for normal Git/SSH workflows. |
 | GitHub auth/config access | Accepted | Needed for PR and repo workflows. |
 | Open internet access | Accepted | Needed for package installs, search, web fetch, and normal development. |
-| Mirrored OpenCode auth by default | Accepted | Keeps host and container usage simple. |
+| Mirrored OpenCode auth by default | Accepted | Keeps native, container, and sandbox usage simple without sharing private SSH keys. |
 | Persistent container state/cache | Accepted | Avoids repeated setup and re-login on every run. |
 | Optional secure mode remains available | Accepted | Kept as a lower-integration fallback, but not made the main path to avoid adoption friction. |
 | Sandbox backend provides stronger isolation | Accepted | Available via `make run-sandbox`; adds microVM boundary for agents that need it. |
@@ -59,7 +59,7 @@ This project ships two backends rather than forcing one choice:
 
 - **`container` backend** (`make run`, `bin/opencode-container`): Runs against a local Docker image you build. Keeps the host integration knobs (local overrides, custom mounts) and is the best fit for daily SSH + tmux + neovim workflows. Isolation is provided by a hardened container (read-only root, dropped capabilities, no-new-privileges, tmpfs /tmp).
 
-- **`sandbox` backend** (`make run-sandbox`, `bin/opencode-sandbox`): Runs against Docker Sandboxes (`sbx`), which executes the agent inside a lightweight microVM. This provides kernel-level separation beyond what a Linux container can offer. Trades the local-override flexibility of the container backend for a cleaner runtime boundary.
+- **`sandbox` backend** (`make run-sandbox`, `bin/opencode-sandbox`): Runs against Docker Sandboxes (`sbx`), which executes the agent inside a lightweight microVM. This provides kernel-level separation beyond what a Linux container can offer. Trades the local-override flexibility of the container backend for a cleaner runtime boundary. Host OpenCode config and auth are shared read-only; sandbox sessions/database stay sandbox-local.
 
 Both backends share the same workspace guardrails (blocks `/`, `$HOME`, and out-of-tree mounts) and the same profile model (`secure` / `native`). Use `make run` for daily work; use `make run-sandbox` when you want stronger isolation or are running untrusted agent code.
 

@@ -1,4 +1,4 @@
-.PHONY: help build update setup run run-native run-secure run-sandbox doctor doctor-sandbox clean clean-sandbox-smoke shell-install
+.PHONY: help build update setup run run-native run-secure run-sandbox setup-sandbox-policy doctor doctor-sandbox clean clean-sandbox-smoke shell-install
 
 # Project variables
 PROJECT_NAME := opencode-containment
@@ -34,6 +34,9 @@ run-native: ## Run with native profile
 
 run-sandbox: ## Run the sandbox backend with Docker Sandboxes
 	@bash bin/opencode-sandbox --profile native
+
+setup-sandbox-policy: ## Apply project Docker Sandboxes network allowlist
+	@bash scripts/setup-sandbox-policy.sh
 
 doctor: ## Check prerequisites
 	@echo "Checking prerequisites..."
