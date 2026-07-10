@@ -4,6 +4,10 @@ opencode-local.sh
 # Local opencode config (personal permission grants, never commit)
 opencode.json
 
+# Local reference clones for OpenCode/plugin research
+/Opencode-Context-Analysis-Plugin/
+/opencode/
+
 # Generated files
 *.tmp
 demo/logs/*.log

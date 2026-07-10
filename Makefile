@@ -1,4 +1,4 @@
-.PHONY: help build update setup run run-native run-secure run-sandbox setup-sandbox-policy doctor doctor-sandbox clean clean-sandbox-smoke shell-install
+.PHONY: help build update setup run run-native run-secure run-sandbox setup-sandbox-policy doctor doctor-sandbox sync-config clean clean-sandbox-smoke shell-install
 
 # Project variables
 PROJECT_NAME := opencode-containment
@@ -35,6 +35,9 @@ run-native: ## Run with native profile
 run-sandbox: ## Run the sandbox backend with Docker Sandboxes
 	@bash bin/opencode-sandbox --profile native
 
+sync-config: ## Re-seed OpenCode cache/state from host into container persistent state
+	@bash bin/opencode-container --sync-config
+
 setup-sandbox-policy: ## Apply project Docker Sandboxes network allowlist
 	@bash scripts/setup-sandbox-policy.sh
 
@@ -44,7 +47,11 @@ doctor: ## Check prerequisites
 	@docker image inspect $(IMAGE_NAME) >/dev/null 2>&1 && echo "✅ Image $(IMAGE_NAME) is built" || echo "❌ Image $(IMAGE_NAME) is not built"
 	@[ -n "$$SSH_AUTH_SOCK" ] && [ -S "$$SSH_AUTH_SOCK" ] && echo "✅ SSH agent is running" || echo "⚠️ SSH agent is not running or socket not found"
 	@[ -d "$(OPENCODE_CONTAINER_HOME)" ] && echo "✅ Persistent directory exists" || echo "❌ Persistent directory does not exist"
-	@[ -f "$(HOME)/.local/share/opencode/auth.json" ] && echo "✅ Host OpenCode auth detected" || echo "⚠️ Host OpenCode auth not detected"
+	@echo "--- OpenCode host state categories ---"
+	@[ -d "$$HOME/.config/opencode" ] && echo "✅ config  (XDG_CONFIG_HOME):  $$HOME/.config/opencode" || echo "⚠️ config  (XDG_CONFIG_HOME) not found at $$HOME/.config/opencode"
+	@[ -f "$$HOME/.local/share/opencode/auth.json" ] && echo "✅ data    (XDG_DATA_HOME):    $$HOME/.local/share/opencode/auth.json" || echo "⚠️ data    (XDG_DATA_HOME) auth not detected"
+	@[ -d "$$HOME/.cache/opencode/packages" ] && echo "✅ cache   (XDG_CACHE_HOME):   $$HOME/.cache/opencode/packages" || echo "⚠️ cache   (XDG_CACHE_HOME) plugin packages not found"
+	@[ -f "$$HOME/.local/state/opencode/plugin-meta.json" ] && echo "✅ state   (XDG_STATE_HOME):   $$HOME/.local/state/opencode/plugin-meta.json" || echo "⚠️ state   (XDG_STATE_HOME) plugin-meta not found"
 
 doctor-sandbox: ## Check Docker Sandboxes (sbx) prerequisites
 	@echo "Checking sandbox prerequisites..."
