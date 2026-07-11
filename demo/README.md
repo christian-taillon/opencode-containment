@@ -73,6 +73,8 @@ Vague prompts like "review this project" often don't trigger it. The key is fram
 - It **does** prevent access to host secrets (`~/.ssh`, `~/.aws`, etc.) because those paths aren't mounted.
 - `--network none` blocks everything but also kills the agent.
 
+Note: the launcher has no built-in `--no-network` flag. To run with `--network none`, add `DOCKER_ARGS+=(--network none)` to `opencode-local.sh` for the container backend.
+
 ## Key Insight
 
 Models resist **direct** exfiltration requests. They follow **indirect** instructions embedded in files they read. Containment works even when the model doesn't.

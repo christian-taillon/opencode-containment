@@ -52,11 +52,17 @@
 # --- Extra Docker Arguments ---
 # Example: mount a personal provider config read-only.
 # DOCKER_ARGS+=(--volume "$HOME/.config/gcloud:/home/opencode/.config/gcloud:ro")
+#
+# Offline / audit mode: block all container outbound traffic.
+# DOCKER_ARGS+=(--network none)
+#
+# Resource limits (container backend only; sandbox uses sbx --memory/--cpus).
+# DOCKER_ARGS+=(--memory 4g --cpus 2 --pids-limit 512)
 
 # --- Credential Passthrough ---
 # Example: pass through personal credentials only when you choose.
-# [[ -n "${tc_accessid:-}" ]] && DOCKER_ARGS+=(--env "tc_accessid=$tc_accessid")
-# [[ -n "${tc_secretkey:-}" ]] && DOCKER_ARGS+=(--env "tc_secretkey=$tc_secretkey")
+# [[ -n "${EXAMPLE_API_KEY:-}" ]] && DOCKER_ARGS+=(--env "EXAMPLE_API_KEY=$EXAMPLE_API_KEY")
+# [[ -n "${EXAMPLE_API_SECRET:-}" ]] && DOCKER_ARGS+=(--env "EXAMPLE_API_SECRET=$EXAMPLE_API_SECRET")
 
 # --- Auth Sync ---
 # Host OpenCode auth sync is enabled by default. The launcher copies host auth

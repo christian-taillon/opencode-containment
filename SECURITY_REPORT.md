@@ -28,6 +28,7 @@ It is a risk-reduction wrapper, not a perfect sandbox.
 | Host config tampering | Mitigated | Git, SSH, OpenCode, and GitHub config are mounted read-only. |
 | Direct host SSH key exposure | Mitigated | Uses forwarded SSH agent instead of mounting private keys. |
 | Privilege escalation inside container | Mitigated | Drops capabilities and blocks privilege escalation. |
+| Zombie processes and signal handling | Mitigated | `--init` runs an init process (tini) inside the container. |
 | Broad env leakage | Partially mitigated | Only selected variables are passed through. |
 | Host state separation | Partially mitigated | Container state/cache is kept under a dedicated host directory. |
 | Stronger runtime isolation (sandbox backend) | Mitigated | Docker Sandboxes runs the agent inside a microVM, providing kernel-level separation beyond what a container can offer. |
@@ -44,6 +45,7 @@ It is a risk-reduction wrapper, not a perfect sandbox.
 | Persistent container state/cache | Accepted | Avoids repeated setup and re-login on every run. |
 | Optional secure mode remains available | Accepted | Kept as a lower-integration fallback, but not made the main path to avoid adoption friction. |
 | Sandbox backend provides stronger isolation | Accepted | Available via `make run-sandbox`; adds microVM boundary for agents that need it. |
+| Resource limits (container backend) | Accepted | The container backend does not set explicit memory, CPU, or PID limits (the sandbox backend does via `sbx --memory` and `--cpus`). This avoids over-constraining diverse workloads. Add limits in `opencode-local.sh` via `DOCKER_ARGS+=(--memory 4g --cpus 2 --pids-limit 512)` if needed. |
 | XDG state seeding from host | Accepted | Host OpenCode auth (`auth.json`, `account.json`, `mcp-auth.json`) is copied into container state each launch. `opencode.db` is seeded only on first init to preserve container-created sessions. Cache and state files (plugins, `models.json`, `plugin-meta.json`) are seeded first-init. `plugin-meta.json` host paths are rewritten to container home paths. This is accepted to keep the native workflow smooth without re-login. |
 
 ## Not Fully Solved
@@ -55,6 +57,7 @@ It is a risk-reduction wrapper, not a perfect sandbox.
 | Credential misuse by a rogue agent | Not prevented | Some credentials are intentionally available for real workflows. |
 | Full isolation | Not provided | Docker reduces risk, but this is not a complete security boundary. |
 | Stronger isolation (microVM) | Available | Use `make run-sandbox` for Docker Sandboxes-backed isolation. |
+| AppArmor pinning | Not provided | AppArmor is applied only when the Docker runtime's default profile is active. On hosts without AppArmor, the launcher does not pin an explicit profile. Pin it in `opencode-local.sh` with `DOCKER_ARGS+=(--security-opt apparmor=docker-default)` if your runtime supports it. |
 
 ## Vulnerability Scanning
 
@@ -64,7 +67,7 @@ GitHub Actions CI builds the image and scans it with Trivy, focusing on CRITICAL
 
 This project ships two backends rather than forcing one choice:
 
-- **`container` backend** (`make run`, `bin/opencode-container`): Runs against a local Docker image you build. Keeps the host integration knobs (local overrides, custom mounts) and is the best fit for daily SSH + tmux + neovim workflows. Isolation is provided by a hardened container (read-only root, dropped capabilities, no-new-privileges, tmpfs /tmp).
+- **`container` backend** (`make run`, `bin/opencode-container`): Runs against a local Docker image you build. Keeps the host integration knobs (local overrides, custom mounts) and is the best fit for daily SSH + tmux + neovim workflows (tmux runs on the host; the image includes neovim but not tmux). Isolation is provided by a hardened container (read-only root, dropped capabilities, no-new-privileges, tmpfs /tmp, --init).
 
 - **`sandbox` backend** (`make run-sandbox`, `bin/opencode-sandbox`): Uses Docker Sandboxes (`sbx`), which runs the agent inside a lightweight microVM. This provides kernel-level separation beyond what a Linux container can offer. Host OpenCode config is mounted read-only and host auth is copied into a sandbox-specific read-only auth mirror. Sandbox sessions and `opencode.db` remain sandbox-local, so native, container, and sandbox usage do not overwrite each other's session databases. Network policy is managed via `config/sbx-network-allow.txt` and applied with `make setup-sandbox-policy`. Trades the local-override flexibility of the container backend for a cleaner runtime boundary.
 
@@ -90,4 +93,4 @@ Use it as a practical safety layer, not as a complete isolation boundary.
 
 The `demo/` directory demonstrates real prompt-injection attacks. Hidden instructions in README HTML comments, code comments, `.github/copilot-instructions.md`, and TODO files can trick agents into exfiltrating environment data. The models tested resist direct exfiltration requests, but they follow indirect instructions embedded in files they read.
 
-Containment helps even when the model does not resist: the default container profile blocks access to host secrets (`~/.ssh`, `~/.aws`, and similar paths) because those paths are never mounted. Running with `--network none` blocks exfiltration entirely, but also prevents the agent from doing useful work. This tradeoff is the core threat model the project addresses: reduce the blast radius when an agent follows malicious instructions hidden in repository files.
+Containment helps even when the model does not resist: the default container profile blocks access to host secrets (`~/.ssh`, `~/.aws`, and similar paths) because those paths are never mounted. Running with `--network none` blocks exfiltration entirely, but also prevents the agent from doing useful work. The launcher has no built-in `--no-network` flag; `--network none` must be added manually via `DOCKER_ARGS+=(--network none)` in `opencode-local.sh`. This tradeoff is the core threat model the project addresses: reduce the blast radius when an agent follows malicious instructions hidden in repository files.

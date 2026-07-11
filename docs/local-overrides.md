@@ -27,6 +27,17 @@ You can:
 - Append to `DOCKER_ARGS` for extra mounts or env vars (container backend only)
 - Append to `DOCKER_BUILD_ARGS` for extra `docker build` flags
 - Override or disable host OpenCode auth mirroring
+- Set `OPENCODE_CONTAINER_HOME` to change where container persistent state lives on the host
+
+## Container Persistent State Location
+
+By default, the container backend stores its persistent state under `$HOME/.local/share/opencode-container`. Override this in `opencode-local.sh` if you want a different host location:
+
+```bash
+export OPENCODE_CONTAINER_HOME="/path/to/container-state"
+```
+
+This directory holds the bind-mounted `~/.local` and `~/.cache` state used inside the container.
 
 ## Optional Proxy Support
 
@@ -75,7 +86,9 @@ By default, the launcher mirrors key host OpenCode state from `~/.local/share/op
 
 Mirrored files:
 
-- `auth.json`
+- `auth.json` (refreshed each launch)
+- `account.json` (refreshed each launch)
+- `mcp-auth.json` (refreshed each launch)
 - `opencode.db` during first-time initialization only
 - `opencode.db-shm` during first-time initialization only
 - `opencode.db-wal` during first-time initialization only
@@ -90,6 +103,50 @@ Useful overrides in `opencode-local.sh`:
 - `export OPENCODE_SYNC_CONFIG_FORCE=1` to force re-seeding cache/state into container state, overwriting existing container copies
 
 See `opencode-local.example.sh` for commented examples.
+
+## Cache and State Seeding
+
+The container backend can seed three categories of host OpenCode state into the container's persistent state before startup. Seeding happens first-init by default; set `OPENCODE_SYNC_CONFIG_FORCE=1` to re-seed and overwrite existing container copies.
+
+Useful overrides in `opencode-local.sh`:
+
+- `export OPENCODE_SYNC_CONFIG_CACHE=0` to skip cache-dir seeding
+- `export OPENCODE_SYNC_CONFIG_STATE=0` to skip state-dir seeding
+- `export OPENCODE_SYNC_CONFIG_FORCE=1` to force re-seeding cache/state into container state, overwriting existing container copies
+- `export OPENCODE_CONTAINER_HOME=/path/to/state` to change where container persistent state lives on the host (default: `$HOME/.local/share/opencode-container`)
+
+Cache (`XDG_CACHE_HOME/opencode`) seeds the container cache directory with:
+
+- `packages/` directory
+- `models.json`
+- `opencode-quota` directory
+- `quota-provider-state`
+
+State (`XDG_STATE_HOME/opencode`) seeds the container state directory with:
+
+- `model.json`
+- `kv.json`
+- `plugin-meta.json` (host paths are rewritten to container home paths so plugin state resolves correctly inside containment)
+
+Data (`XDG_DATA_HOME/opencode`) auth/account/mcp files are refreshed each launch. `opencode.db` is seeded first-init only so container-created sessions remain resumable.
+
+## Offline / Audit Mode and Resource Limits
+
+The launcher has no built-in `--no-network` or resource-limit flags. Because `opencode-local.sh` is sourced before `docker run`, you can append hardening arguments through `DOCKER_ARGS` for the container backend:
+
+Block all outbound container traffic:
+
+```bash
+DOCKER_ARGS+=(--network none)
+```
+
+Set memory, CPU, and PID limits:
+
+```bash
+DOCKER_ARGS+=(--memory 4g --cpus 2 --pids-limit 512)
+```
+
+These only affect the container backend. The sandbox backend applies limits via `OPENCODE_SANDBOX_MEMORY` and `OPENCODE_SANDBOX_CPUS` instead.
 
 ## Precedence
 

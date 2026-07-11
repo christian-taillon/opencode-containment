@@ -29,12 +29,15 @@ Ship a secure, native-feeling OpenCode container workflow with a small, easy-to-
 - `bin/opencode-sandbox`: sandbox backend launcher
 - `opencode-local.example.sh`: tracked example for local-only overrides copied to `opencode-local.sh`
 - `Makefile`: helper targets for build, setup, run, doctor, shell install, update, sync-config, and sandbox policy
+- `install.sh`: one-shot setup script (builds image and creates local state directories)
 - `scripts/build-image.sh`: build helper with proxy/pin support
 - `scripts/setup-sandbox-policy.sh`: sandbox network policy setup
 - `config/sbx-network-allow.txt`: sandbox network allowlist
 - `demo/`: prompt injection demo
 - `.github/workflows/ci.yml`: CI pipeline
-- Supporting files: `scripts/nvim-wrapper`, `scripts/container-init.sh`, `.gitignore`, `LICENSE`
+- Supporting files: `scripts/nvim-wrapper`, `scripts/container-init.sh`, `.dockerignore`, `.gitignore`, `LICENSE`
+
+The following empty placeholder files have been removed: `scripts/init-local-overrides.sh`, `config/opencode-container.local.sh.example`, `config/opencode-overrides.example.json`.
 
 ## Known Constraints
 
