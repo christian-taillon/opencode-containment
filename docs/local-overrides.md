@@ -14,7 +14,9 @@ cp opencode-local.example.sh opencode-local.sh
 
 ## What You Can Configure
 
-`opencode-local.sh` is sourced by `bin/opencode-container` before `docker run`. You can:
+`opencode-local.sh` is sourced by `bin/opencode-container` before `docker run`. `bin/opencode-sandbox` also sources it, but Docker-specific `DOCKER_ARGS` customizations do not carry over to the sandbox backend; only environment-style settings apply there. Host OpenCode config is readable inside the sandbox by design; keep secrets out of committed or shared config files.
+
+You can:
 
 - Set `OPENCODE_CONFIG_CONTENT` (JSON string passed to the container)
 - Set `OPENCODE_OVERRIDES_FILE` (path to a JSON file)
@@ -22,7 +24,7 @@ cp opencode-local.example.sh opencode-local.sh
 - Set optional proxy or custom CA environment variables for both runtime and builds
 - Set `OPENCODE_BUILD_EXTRA_APK_PACKAGES` for local-only extra Alpine packages during image builds
 - Set optional build version pins for Rust, `uv`, and `marksman`
-- Append to `DOCKER_ARGS` for extra mounts or env vars
+- Append to `DOCKER_ARGS` for extra mounts or env vars (container backend only)
 - Append to `DOCKER_BUILD_ARGS` for extra `docker build` flags
 - Override or disable host OpenCode auth mirroring
 
@@ -81,7 +83,11 @@ Mirrored files:
 Useful overrides in `opencode-local.sh`:
 
 - `export OPENCODE_SYNC_HOST_AUTH=0` to disable mirroring
-- `export OPENCODE_HOST_STATE_DIR=/path/to/opencode-state` to mirror from a different host directory
+- `export OPENCODE_HOST_STATE_DIR=/path/to/opencode-state` to mirror data files from a different host directory
+- `export OPENCODE_HOST_CACHE_DIR=/path/to/opencode-cache` to override the host cache directory used as a seed source
+- `export OPENCODE_HOST_RUNTIME_STATE_DIR=/path/to/opencode-runtime-state` to override the host state directory used as a seed source
+- `export OPENCODE_SANDBOX_STATE_DIR=/path/to/opencode-sandbox` to change the sandbox support files directory
+- `export OPENCODE_SYNC_CONFIG_FORCE=1` to force re-seeding cache/state into container state, overwriting existing container copies
 
 See `opencode-local.example.sh` for commented examples.
 

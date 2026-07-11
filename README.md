@@ -43,6 +43,10 @@ Run OpenCode from SSH + tmux + neovim with a native workflow, while keeping stro
 - You can keep using VS Code, neovim, or any local editor without putting that editor inside the container.
 - This keeps container complexity low while preserving a native editing loop.
 
+## Demo
+
+This repo includes a prompt injection / data exfiltration demo under `demo/`. It builds a fake lab repo with hidden instructions in common files (README HTML comments, code comments, `copilot-instructions.md`, TODO comments) and shows how agents can be tricked into exfiltrating environment data, and how containment blocks host secrets even when the model follows the instructions. See `demo/README.md` for setup and walkthrough.
+
 ## Quick Start
 
 1. Clone and enter the repository:
@@ -82,6 +86,14 @@ Use `--` only when you want to run a raw command in the container:
     opencode-container -- bash
     ```
 
+Re-seed host config into container state without launching a container:
+
+    ```bash
+    opencode-container --sync-config
+    # or
+    make sync-config
+    ```
+
 Optional: run the `sandbox` backend instead:
 
    ```bash
@@ -89,6 +101,13 @@ Optional: run the `sandbox` backend instead:
    ```
 
 Host OpenCode auth from `~/.local/share/opencode` is mirrored into the container's persistent state automatically, so providers you have already logged into on the host should appear inside `make run` without extra setup. The host database is copied only during first-time container state initialization so container-created sessions remain resumable with `opencode-container -s <session-id>`.
+
+The launcher seeds state across all four XDG base categories:
+
+- **Config (`XDG_CONFIG_HOME`)**: mounted read-only and shared with the host
+- **Data (`XDG_DATA_HOME`)**: auth-adjacent files (`auth.json`, account data, MCP auth) are refreshed each launch; `opencode.db` is seeded first-init only
+- **Cache (`XDG_CACHE_HOME`)**: plugins, `models.json`, and quota caches are seeded first-init only
+- **State (`XDG_STATE_HOME`)**: `model.json`, `kv.json`, and `plugin-meta.json` are seeded first-init only, with host paths rewritten to container home paths
 
 For the sandbox backend, host OpenCode config is mounted read-only and host auth is copied into a sandbox-specific read-only auth mirror. Sandbox sessions and `opencode.db` remain sandbox-local, so native, container, and sandbox usage do not overwrite each other's session databases.
 
@@ -178,6 +197,8 @@ Both backends are designed with security as a primary concern:
                +--------------------------+       +----------------------+
 ```
 
+The `demo/` directory and `.github/workflows/ci.yml` sit alongside this core: CI builds and scans the image, and the demo exercises the prompt-injection threat model that motivates the containment boundaries above.
+
 ## Configuration
 
 You can customize the environment with environment variables or a local override script:
@@ -197,7 +218,10 @@ You can customize the environment with environment variables or a local override
 - `OPENCODE_SANDBOX_TEMPLATE`: Override the sandbox template image.
 - `OPENCODE_CONFIG_DIR`: Host OpenCode config directory mounted read-only into sandbox (default: `$HOME/.config/opencode`).
 - `OPENCODE_HOST_STATE_DIR`: Host OpenCode state directory used as the auth source (default: `$HOME/.local/share/opencode`).
+- `OPENCODE_HOST_CACHE_DIR`: Override the host cache directory used as a seed source (default: `$HOME/.cache/opencode`).
+- `OPENCODE_HOST_RUNTIME_STATE_DIR`: Override the host runtime state directory used as a seed source (default: `$HOME/.local/state/opencode`).
 - `OPENCODE_SANDBOX_STATE_DIR`: Host directory for sandbox support files such as the auth mirror (default: `$HOME/.local/share/opencode-sandbox`).
+- `OPENCODE_SYNC_CONFIG_FORCE`: Set to `1` to force re-seeding cache/state into container state, overwriting existing container copies.
 
 For local customization, copy the tracked example file and keep your personal changes in `opencode-local.sh`:
 
@@ -288,6 +312,7 @@ See `docs/local-overrides.md` for local override layering and examples.
 - `make run-secure`: Run the container with the secure profile
 - `make run-sandbox`: Run the `sandbox` backend
 - `make clean-sandbox-smoke`: Remove the default named smoke-test sandbox
+- `make sync-config`: Re-seed OpenCode cache/state from host into container persistent state without launching a container
 - `make shell-install`: Install `opencode-container` to `~/.local/bin`
 - `make clean`: Remove generated files and persistent state
 
@@ -333,7 +358,13 @@ Leave checksum variables empty only when you intentionally want floating latest 
 - Harden further as needed: use `make run-secure`, trim mounts, and keep host configs read-only.
 - Prefer fork-level customization over adding heavy framework logic here.
 
+## Continuous Integration
+
+GitHub Actions runs on every push to `main` and on pull requests. The workflow checks shell script syntax, builds the image, smoke-tests installed tools (`uv`, `rustc`, `marksman`, `opencode`), and scans the built image with Trivy for CRITICAL and HIGH vulnerabilities. Trivy results are uploaded to GitHub Code Scanning.
+
 ## Contributing
+
+This is a public repository. Do not commit secrets, personal paths, or sensitive configuration. `opencode-local.sh` is gitignored specifically so you can keep personal overrides local.
 
 Contributions are welcome. Please keep changes simple, configurable, and security-conscious.
 

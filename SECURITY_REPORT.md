@@ -6,6 +6,8 @@ The goal of this project is to reduce the blast radius of developer and agentic 
 
 This project is not an agent permission or policy system. Agent permissions, model/tool configuration, and approval rules are handled elsewhere. The focus here is runtime containment for a human-operated development workflow: preserve the normal interactive experience while reducing unnecessary access to the host, credentials, and filesystem state where practical.
 
+This is a public repository. Do not commit secrets, tokens, or personal configuration. The `opencode-local.sh` override file is gitignored specifically to keep personal config local.
+
 ## Usability First
 
 If this environment is too restrictive, developers will not use it.
@@ -42,6 +44,7 @@ It is a risk-reduction wrapper, not a perfect sandbox.
 | Persistent container state/cache | Accepted | Avoids repeated setup and re-login on every run. |
 | Optional secure mode remains available | Accepted | Kept as a lower-integration fallback, but not made the main path to avoid adoption friction. |
 | Sandbox backend provides stronger isolation | Accepted | Available via `make run-sandbox`; adds microVM boundary for agents that need it. |
+| XDG state seeding from host | Accepted | Host OpenCode auth (`auth.json`, `account.json`, `mcp-auth.json`) is copied into container state each launch. `opencode.db` is seeded only on first init to preserve container-created sessions. Cache and state files (plugins, `models.json`, `plugin-meta.json`) are seeded first-init. `plugin-meta.json` host paths are rewritten to container home paths. This is accepted to keep the native workflow smooth without re-login. |
 
 ## Not Fully Solved
 
@@ -53,13 +56,17 @@ It is a risk-reduction wrapper, not a perfect sandbox.
 | Full isolation | Not provided | Docker reduces risk, but this is not a complete security boundary. |
 | Stronger isolation (microVM) | Available | Use `make run-sandbox` for Docker Sandboxes-backed isolation. |
 
+## Vulnerability Scanning
+
+GitHub Actions CI builds the image and scans it with Trivy, focusing on CRITICAL and HIGH severity findings. Results are uploaded to GitHub Code Scanning. This catches known vulnerabilities in the base image and installed packages at build time, but it is a point-in-time scan, not continuous monitoring of a running environment.
+
 ## Two Backends
 
 This project ships two backends rather than forcing one choice:
 
 - **`container` backend** (`make run`, `bin/opencode-container`): Runs against a local Docker image you build. Keeps the host integration knobs (local overrides, custom mounts) and is the best fit for daily SSH + tmux + neovim workflows. Isolation is provided by a hardened container (read-only root, dropped capabilities, no-new-privileges, tmpfs /tmp).
 
-- **`sandbox` backend** (`make run-sandbox`, `bin/opencode-sandbox`): Runs against Docker Sandboxes (`sbx`), which executes the agent inside a lightweight microVM. This provides kernel-level separation beyond what a Linux container can offer. Trades the local-override flexibility of the container backend for a cleaner runtime boundary. Host OpenCode config and auth are shared read-only; sandbox sessions/database stay sandbox-local.
+- **`sandbox` backend** (`make run-sandbox`, `bin/opencode-sandbox`): Uses Docker Sandboxes (`sbx`), which runs the agent inside a lightweight microVM. This provides kernel-level separation beyond what a Linux container can offer. Host OpenCode config is mounted read-only and host auth is copied into a sandbox-specific read-only auth mirror. Sandbox sessions and `opencode.db` remain sandbox-local, so native, container, and sandbox usage do not overwrite each other's session databases. Network policy is managed via `config/sbx-network-allow.txt` and applied with `make setup-sandbox-policy`. Trades the local-override flexibility of the container backend for a cleaner runtime boundary.
 
 Both backends share the same workspace guardrails (blocks `/`, `$HOME`, and out-of-tree mounts) and the same profile model (`secure` / `native`). Use `make run` for daily work; use `make run-sandbox` when you want stronger isolation or are running untrusted agent code.
 
@@ -78,3 +85,9 @@ This setup meaningfully reduces some host-level risk, especially accidental dama
 It does **not** claim to fully stop a determined rogue agent from changing repo contents, using allowed credentials, or sending data over allowed network paths.
 
 Use it as a practical safety layer, not as a complete isolation boundary.
+
+## Threat Context: The Included Demo
+
+The `demo/` directory demonstrates real prompt-injection attacks. Hidden instructions in README HTML comments, code comments, `.github/copilot-instructions.md`, and TODO files can trick agents into exfiltrating environment data. The models tested resist direct exfiltration requests, but they follow indirect instructions embedded in files they read.
+
+Containment helps even when the model does not resist: the default container profile blocks access to host secrets (`~/.ssh`, `~/.aws`, and similar paths) because those paths are never mounted. Running with `--network none` blocks exfiltration entirely, but also prevents the agent from doing useful work. This tradeoff is the core threat model the project addresses: reduce the blast radius when an agent follows malicious instructions hidden in repository files.

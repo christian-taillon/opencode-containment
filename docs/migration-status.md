@@ -15,13 +15,25 @@ Ship a secure, native-feeling OpenCode container workflow with a small, easy-to-
 - Simplified entrypoint in `scripts/container-init.sh` (banner + exec)
 - Single local override pattern via `opencode-local.sh`
 - Compatibility additions for prebuilt binaries on Alpine (`gcompat`, `libc6-compat`)
+- Sandbox backend (`bin/opencode-sandbox`) with Docker Sandboxes support
+- Demo showing prompt injection attacks and containment benefits
+- GitHub Actions CI with shell syntax checks, image build, smoke tests, and Trivy scanning
+- XDG state seeding across all four base categories (`config`, `data`, `cache`, `state`)
+- Proxy and custom CA passthrough for builds and runtime
+- `make update` target for refreshing base image and rebuilding
 
 ## Current Layout
 
 - `Dockerfile`: builds the environment and installs tools plus parser artifacts
 - `bin/opencode-container`: single launcher entry point with mount policy and profile logic
+- `bin/opencode-sandbox`: sandbox backend launcher
 - `opencode-local.example.sh`: tracked example for local-only overrides copied to `opencode-local.sh`
-- `Makefile`: helper targets for build, setup, run, doctor, and shell install
+- `Makefile`: helper targets for build, setup, run, doctor, shell install, update, sync-config, and sandbox policy
+- `scripts/build-image.sh`: build helper with proxy/pin support
+- `scripts/setup-sandbox-policy.sh`: sandbox network policy setup
+- `config/sbx-network-allow.txt`: sandbox network allowlist
+- `demo/`: prompt injection demo
+- `.github/workflows/ci.yml`: CI pipeline
 - Supporting files: `scripts/nvim-wrapper`, `scripts/container-init.sh`, `.gitignore`, `LICENSE`
 
 ## Known Constraints
@@ -43,6 +55,10 @@ Ship a secure, native-feeling OpenCode container workflow with a small, easy-to-
    - `make doctor`
 6. Run native profile:
    - `make run`
+7. Optional: stronger isolation with the sandbox backend:
+   - `make run-sandbox`
+8. Optional: apply sandbox network policy:
+   - `make setup-sandbox-policy`
 
 ## Validation Checklist on New Host
 
@@ -51,6 +67,8 @@ Ship a secure, native-feeling OpenCode container workflow with a small, easy-to-
 - Markdown buffer opens and parser-dependent plugins initialize
 - Markdown LSP (`marksman`) attaches in markdown files
 - Git/SSH agent forwarding works for repo operations
+- Sandbox backend starts if `sbx` is available
+- CI passes on push/PR
 
 ## If Something Fails
 
