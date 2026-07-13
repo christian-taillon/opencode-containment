@@ -1,10 +1,16 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-LISTEN_PORT="${LISTEN_PORT:-8888}"
+LISTEN_PORT="${LISTEN_PORT:-18888}"
 LISTEN_HOST="${LISTEN_HOST:-0.0.0.0}"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 LOG_DIR="$SCRIPT_DIR/logs"
+LISTENER_PID=""
+
+if [[ ! "$LISTEN_PORT" =~ ^[0-9]+$ ]] || ((LISTEN_PORT < 1 || LISTEN_PORT > 65535)); then
+    echo "Error: LISTEN_PORT must be an integer from 1 to 65535." >&2
+    exit 1
+fi
 
 mkdir -p "$LOG_DIR"
 
@@ -12,20 +18,37 @@ TIMESTAMP="$(date +%Y%m%d_%H%M%S)"
 LOG_FILE="$LOG_DIR/exfil_${TIMESTAMP}.log"
 
 cleanup() {
+    local exit_status="${1:-0}"
+    trap - EXIT INT TERM
+    if [[ -n "$LISTENER_PID" ]]; then
+        kill "$LISTENER_PID" 2>/dev/null || true
+        wait "$LISTENER_PID" 2>/dev/null || true
+    fi
     echo ""
     echo "Stopping listener. Log saved to: $LOG_FILE"
-    kill "$LISTENER_PID" 2>/dev/null || true
+    exit "$exit_status"
 }
 
-trap cleanup EXIT INT TERM
+trap 'cleanup $?' EXIT
+trap 'cleanup 130' INT
+trap 'cleanup 143' TERM
+
+if [[ "$LISTEN_HOST" == "0.0.0.0" || "$LISTEN_HOST" == "::" ]]; then
+    BIND_DESCRIPTION="all interfaces"
+else
+    BIND_DESCRIPTION="selected interface"
+fi
 
 echo "========================================"
 echo "  Agent Exfiltration Listener"
 echo "========================================"
 echo ""
-echo "  Listening on: ${LISTEN_HOST}:${LISTEN_PORT} (all interfaces)"
+echo "  Listening on: ${LISTEN_HOST}:${LISTEN_PORT} (${BIND_DESCRIPTION})"
 echo "  Logging to:   ${LOG_FILE}"
 echo "  HTTP response: 200 OK (curl exits cleanly)"
+if [[ "$BIND_DESCRIPTION" == "all interfaces" ]]; then
+    echo "  Warning: this listener may be reachable from your LAN."
+fi
 echo ""
 echo "  Waiting for exfiltrated data..."
 echo "  (Press Ctrl+C to stop)"
@@ -35,13 +58,16 @@ echo ""
 # Python HTTP server that logs request bodies and responds 200 OK.
 # This ensures curl exits cleanly instead of hanging, which prevents
 # agents from retrying and producing messy "Waiting for output" messages.
-python3 -c "
-import sys, json, datetime, urllib.parse
+LISTEN_HOST="$LISTEN_HOST" LISTEN_PORT="$LISTEN_PORT" LOG_FILE="$LOG_FILE" python3 - <<'PY' &
+import datetime
+import os
+import sys
+import urllib.parse
 from http.server import HTTPServer, BaseHTTPRequestHandler
 
-log_file = '$LOG_FILE'
-port = $LISTEN_PORT
-host = '$LISTEN_HOST'
+log_file = os.environ["LOG_FILE"]
+port = int(os.environ["LISTEN_PORT"])
+host = os.environ["LISTEN_HOST"]
 
 class Handler(BaseHTTPRequestHandler):
     def do_POST(self):
@@ -94,10 +120,10 @@ class Handler(BaseHTTPRequestHandler):
         pass  # Suppress default stderr logging
 
 server = HTTPServer((host, port), Handler)
-print(f'[{datetime.datetime.now().strftime(\"%Y-%m-%d %H:%M:%S\")}] Listener ready on {host}:{port}')
+print(f'[{datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")}] Listener ready on {host}:{port}')
 sys.stdout.flush()
 server.serve_forever()
-" &
+PY
 
 LISTENER_PID=$!
-wait $LISTENER_PID
+wait "$LISTENER_PID"

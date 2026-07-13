@@ -265,13 +265,13 @@ fi
 # - Podman rootless needs keep-id for writable bind mounts.
 # - Docker uses explicit uid:gid mapping.
 RUNTIME_VERSION="$(docker --version 2>/dev/null || true)"
-RW_PERSISTENT_MOUNT_OPTS="rw"
+RW_MOUNT_OPTS="rw"
 if [[ "$RUNTIME_VERSION" == podman* ]]; then
     DOCKER_ARGS+=(--userns keep-id)
     DOCKER_ARGS+=(--user "$(id -u):$(id -g)")
     # Podman on SELinux hosts needs relabeling for writable bind mounts.
     # Keep this Podman-only so Docker users keep default mount semantics.
-    RW_PERSISTENT_MOUNT_OPTS="rw,Z"
+    RW_MOUNT_OPTS="rw,Z"
 else
     DOCKER_ARGS+=(--user "$(id -u):$(id -g)")
 fi
@@ -294,10 +294,10 @@ fi
 
 # Secure profile mounts
 DOCKER_ARGS+=(
-    --volume "$WORKSPACE:/workspace:rw"
+    --volume "$WORKSPACE:/workspace:$RW_MOUNT_OPTS"
 
-    --volume "$OPENCODE_CONTAINER_HOME/local:/home/opencode/.local:$RW_PERSISTENT_MOUNT_OPTS"
-    --volume "$OPENCODE_CONTAINER_HOME/cache:/home/opencode/.cache:$RW_PERSISTENT_MOUNT_OPTS"
+    --volume "$OPENCODE_CONTAINER_HOME/local:/home/opencode/.local:$RW_MOUNT_OPTS"
+    --volume "$OPENCODE_CONTAINER_HOME/cache:/home/opencode/.cache:$RW_MOUNT_OPTS"
 )
 
 # OpenCode host config (XDG_CONFIG_HOME) is mounted read-only so the container
