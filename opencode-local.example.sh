@@ -19,6 +19,16 @@
 # export OPENCODE_PROFILE="native"
 # export OPENCODE_IMAGE="opencode-containment:latest"
 
+# --- Optional Local Web Server ---
+# `opencode-container --web-server start` publishes this port to 127.0.0.1 by
+# default. Use --network-accessible only per invocation; it has no environment
+# default because it exposes HTTP Basic Auth credentials on the LAN.
+# Credentials are scoped to each workspace and port at
+# `$OPENCODE_CONTAINER_HOME/web-server/<container-name>.credentials` with mode
+# 0600 (the containing directory is mode 0700). Use `--web-server status` or
+# `--web-server stop` with the same port to inspect or remove the server.
+# export OPENCODE_WEB_PORT="4096"
+
 # --- Optional Proxy / CA Passthrough ---
 # Runtime and docker builds both pass through standard proxy variables only when set.
 # Keep NO_PROXY aligned with localhost/127.0.0.1 for the local OpenCode server when needed.

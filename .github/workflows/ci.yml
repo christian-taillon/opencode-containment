@@ -27,10 +27,15 @@ jobs:
             bin/opencode-sandbox \
             scripts/build-image.sh \
             scripts/container-init.sh \
+            scripts/web-server-entrypoint.sh \
+            scripts/test-launcher.sh \
             demo/run-demo.sh \
             demo/clean.sh \
             demo/listener.sh \
             demo/fake-env.sh
+
+      - name: Test launcher
+        run: bash scripts/test-launcher.sh
 
       - name: Build image
         env:
@@ -43,6 +48,86 @@ jobs:
           docker run --rm --entrypoint rustc opencode-containment:ci --version
           docker run --rm --entrypoint marksman opencode-containment:ci --version
           docker run --rm --entrypoint opencode opencode-containment:ci --version
+
+      - name: Verify web server lifecycle and authentication
+        run: |
+          set -euo pipefail
+          state_dir="$(mktemp -d)"
+          output_file="$(mktemp)"
+          status_file="$(mktemp)"
+          lan_output_file="$(mktemp)"
+          auth_config=""
+          container_id=""
+          network_name=""
+          lan_container_id=""
+          lan_network_name=""
+          cleanup() {
+            rm -f "$auth_config" "$output_file" "$status_file" "$lan_output_file"
+            [[ -n "$container_id" ]] && docker rm -f "$container_id" >/dev/null 2>&1 || true
+            [[ -n "$network_name" ]] && docker network rm "$network_name" >/dev/null 2>&1 || true
+            [[ -n "$lan_container_id" ]] && docker rm -f "$lan_container_id" >/dev/null 2>&1 || true
+            [[ -n "$lan_network_name" ]] && docker network rm "$lan_network_name" >/dev/null 2>&1 || true
+            rm -rf "$state_dir"
+          }
+          trap cleanup EXIT
+          parse_output_value() {
+            local label="$1" file="$2"
+            awk -F ': ' -v label="$label" '
+              $1 == label {
+                matches++
+                if (matches != 1 || NF != 2 || $2 == "") invalid = 1
+                else value = $2
+              }
+              END {
+                if (matches != 1 || invalid) exit 1
+                print value
+              }
+            ' "$file"
+          }
+          port="$(python3 -c 'import socket; s = socket.socket(); s.bind(("127.0.0.1", 0)); print(s.getsockname()[1]); s.close()')"
+          lan_port="$port"
+          while [[ "$lan_port" == "$port" ]]; do
+            lan_port="$(python3 -c 'import socket; s = socket.socket(); s.bind(("127.0.0.1", 0)); print(s.getsockname()[1]); s.close()')"
+          done
+          OPENCODE_CONTAINER_HOME="$state_dir" bin/opencode-container --image opencode-containment:ci --web-server start --web-port "$port" | tee "$output_file"
+          credentials_file="$(parse_output_value '  Basic Auth credentials' "$output_file")"
+          container_id="$(parse_output_value '  Container ID' "$output_file")"
+          network_name="$(parse_output_value '  Network' "$output_file")"
+          teardown_command="$(parse_output_value '  Stop and remove' "$output_file")"
+          [[ -f "$credentials_file" && "$container_id" =~ ^[0-9a-f]{64}$ && -n "$network_name" ]]
+          [[ "$teardown_command" == "opencode-container --workspace $PWD --web-server stop --web-port $port" ]]
+          [[ "$(docker container inspect --format '{{range (index .NetworkSettings.Ports "'"$port"'/tcp")}}{{println .HostIp}}{{end}}' "$container_id")" == "127.0.0.1" ]]
+          OPENCODE_CONTAINER_HOME="$state_dir" bin/opencode-container --image opencode-containment:ci --web-server status --web-port "$port" > "$status_file"
+          [[ "$(parse_output_value '  Service' "$status_file")" == "running" ]]
+          username=""
+          password=""
+          while IFS='=' read -r key value; do
+            case "$key" in
+              OPENCODE_SERVER_USERNAME) username="$value" ;;
+              OPENCODE_SERVER_PASSWORD) password="$value" ;;
+              *) exit 1 ;;
+            esac
+          done < "$credentials_file"
+          [[ "$username" =~ ^opencode-[0-9a-f]{16}$ && "$password" =~ ^[0-9a-f]{64}$ ]]
+          [[ "$(curl --disable --silent --output /dev/null --write-out '%{http_code}' --noproxy 127.0.0.1 "http://127.0.0.1:$port/global/health")" == "401" ]]
+          auth_config="$(mktemp "$state_dir/.curl-auth.XXXXXX")"
+          printf 'user = "%s:%s"\n' "$username" "$password" > "$auth_config"
+          [[ "$(curl --disable --silent --location --config "$auth_config" --output /dev/null --write-out '%{http_code}' --noproxy 127.0.0.1 "http://127.0.0.1:$port/global/health")" =~ ^2[0-9]{2}$ ]]
+          OPENCODE_CONTAINER_HOME="$state_dir" bin/opencode-container --image opencode-containment:ci --web-server start --web-port "$lan_port" --network-accessible 2>&1 | tee "$lan_output_file"
+          lan_container_id="$(parse_output_value '  Container ID' "$lan_output_file")"
+          lan_network_name="$(parse_output_value '  Network' "$lan_output_file")"
+          [[ "$(docker container inspect --format '{{range (index .NetworkSettings.Ports "'"$lan_port"'/tcp")}}{{println .HostIp}}{{end}}' "$lan_container_id")" == "0.0.0.0" ]]
+          docker stop "$container_id" >/dev/null
+          OPENCODE_CONTAINER_HOME="$state_dir" bin/opencode-container --image opencode-containment:ci --web-server status --web-port "$port" > "$status_file"
+          [[ "$(parse_output_value '  Service' "$status_file")" == "stopped" ]]
+          OPENCODE_CONTAINER_HOME="$state_dir" bin/opencode-container --image opencode-containment:ci --web-server stop --web-port "$port" > "$status_file"
+          if docker container inspect "$container_id" >/dev/null 2>&1 || docker network inspect "$network_name" >/dev/null 2>&1; then
+            exit 1
+          fi
+          OPENCODE_CONTAINER_HOME="$state_dir" bin/opencode-container --image opencode-containment:ci --web-server stop --web-port "$lan_port" > "$status_file"
+          if docker container inspect "$lan_container_id" >/dev/null 2>&1 || docker network inspect "$lan_network_name" >/dev/null 2>&1; then
+            exit 1
+          fi
 
       - name: Scan image with Trivy
         uses: aquasecurity/trivy-action@v0.36.0

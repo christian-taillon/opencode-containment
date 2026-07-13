@@ -58,8 +58,9 @@ Both backends share the same workspace guardrails (blocks `/`, `$HOME`, and out-
 | `--tmpfs /tmp` | Active | Ephemeral tmpfs, 256MB, nosuid/nodev |
 | `--init` | Active | Init process (tini) for signal handling and zombie reaping |
 | `--user $(id -u):$(id -g)` | Active | Non-root user mapping |
-| `--rm` | Active | Container removed on exit |
-| Workspace guardrails | Active | Rejects `/`, `$HOME`, and out-of-tree mounts |
+| `--rm` | Active for normal launches | Interactive and raw-command containers are removed on exit; detached web-server containers are deliberately retained until lifecycle `stop` removes verified-owned resources. |
+| Web-server listener | Guarded | Detached web servers are long-lived HTTP listeners with per-workspace/port Basic Auth credentials stored mode `0600`; loopback is the default bind and `--network-accessible` is an explicit LAN opt-in. |
+| Workspace guardrails | Active for mounts | Start/run rejects `/`, `$HOME`, and out-of-tree mounts. Lifecycle status/stop only addresses existing labeled Docker resources and can use the original canonical workspace path after deletion. |
 | Host config mounts | Read-only | `.gitconfig`, `.ssh/config`, `.ssh/known_hosts`, OpenCode config, GitHub CLI config |
 | SSH keys | Not mounted | SSH agent socket forwarded instead |
 | Docker socket | Not mounted | `/var/run/docker.sock` never exposed |
@@ -103,6 +104,8 @@ Both backends share the same workspace guardrails (blocks `/`, `$HOME`, and out-
 | Open internet access | Accepted | Needed for package installs, search, web fetch, and normal development. |
 | Mirrored OpenCode auth by default | Accepted | Keeps native, container, and sandbox usage simple without sharing private SSH keys. |
 | Persistent container state/cache | Accepted | Avoids repeated setup and re-login on every run. |
+| Persistent web-server credentials and listener | Accepted | Web servers are detached rather than `--rm`; credentials persist across restarts and `stop` preserves them. Treat the listener and its Basic Auth secret as sensitive until explicitly stopped. |
+| Optional LAN web-server exposure | Accepted with explicit opt-in | `--network-accessible` publishes HTTP Basic Auth to the LAN. Docker Engine 28+ is required for web-server starts because older Docker releases can expose even localhost-published ports to hosts on the same L2 network. |
 | Optional secure mode remains available | Accepted | Kept as a lower-integration fallback, but not made the main path to avoid adoption friction. |
 | Sandbox backend provides stronger isolation | Accepted | Available via `make run-sandbox`; adds microVM boundary for agents that need it. |
 | Resource limits (container backend) | Accepted | The container backend does not set explicit memory, CPU, or PID limits (the sandbox backend does via `sbx --memory` and `--cpus`). This avoids over-constraining diverse workloads. Add limits in `opencode-local.sh` via `DOCKER_ARGS+=(--memory 4g --cpus 2 --pids-limit 512)` if needed. |
@@ -115,6 +118,7 @@ Both backends share the same workspace guardrails (blocks `/`, `$HOME`, and out-
 | Exfiltration prevention | Not fully addressed | Network access remains usable by default. Add `DOCKER_ARGS+=(--network none)` in `opencode-local.sh` for offline/audit mode. |
 | Malicious repo changes | Not prevented | The workspace is intentionally writable. |
 | Credential misuse by a rogue agent | Not prevented | Some credentials are intentionally available for real workflows. |
+| Web-server credential exposure | Not fully prevented | Basic Auth protects the long-lived HTTP listener, but any LAN opt-in, Docker daemon administrator, attached network container, or process that can read the credential file is trusted. Stop the listener when it is no longer needed. |
 | Full isolation | Not provided | Docker reduces risk, but this is not a complete security boundary. |
 | Stronger isolation (microVM) | Available | Use `make run-sandbox` for Docker Sandboxes-backed isolation. |
 | AppArmor pinning | Not provided | AppArmor is applied only when the Docker runtime's default profile is active. On hosts without AppArmor, the launcher does not pin an explicit profile. Pin it in `opencode-local.sh` with `DOCKER_ARGS+=(--security-opt apparmor=docker-default)` if your runtime supports it. |

@@ -1,7 +1,28 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+resolve_script_path() {
+    local source="$1" directory target
+
+    while [[ -h "$source" ]]; do
+        directory="$(cd -P "$(dirname "$source")" && pwd)"
+        target="$(readlink "$source")" || return 1
+        if [[ "$target" == /* ]]; then
+            source="$target"
+        else
+            source="$directory/$target"
+        fi
+    done
+
+    directory="$(cd -P "$(dirname "$source")" && pwd)" || return 1
+    printf '%s/%s\n' "$directory" "$(basename "$source")"
+}
+
+SCRIPT_PATH="$(resolve_script_path "${BASH_SOURCE[0]}")" || {
+    echo "Error: Could not resolve launcher path." >&2
+    exit 1
+}
+SCRIPT_DIR="$(cd "$(dirname "$SCRIPT_PATH")/.." && pwd -P)"
 
 resolve_path() {
     local target="$1"
@@ -28,6 +49,25 @@ resolve_path() {
     )
 }
 
+resolve_web_lifecycle_workspace() {
+    local target="$1" base
+
+    # A lifecycle command must keep addressing the path string that named the
+    # server when it was started, even after that directory is removed. The
+    # launcher prints an absolute canonical path, so preserve an absent absolute
+    # path verbatim; existing paths can still be canonicalized safely.
+    if [[ -e "$target" ]]; then
+        resolve_path "$target"
+        return
+    fi
+    if [[ "$target" == /* ]]; then
+        printf '%s\n' "$target"
+        return
+    fi
+    base="$(resolve_path "$PWD")" || return 1
+    printf '%s/%s\n' "$base" "$target"
+}
+
 pass_env_if_set() {
     local var
     for var in "$@"; do
@@ -35,6 +75,20 @@ pass_env_if_set() {
             DOCKER_ARGS+=(--env "$var=${!var}")
         fi
     done
+}
+
+sanitize_web_container_name() {
+    local raw="$1"
+    local sanitized
+
+    sanitized="$(printf '%s' "$raw" | tr '[:upper:]' '[:lower:]' | tr -cs '[:alnum:]._-' '-')"
+    sanitized="${sanitized#-}"
+    sanitized="${sanitized%-}"
+    sanitized="${sanitized:0:40}"
+    if [[ -z "$sanitized" ]]; then
+        sanitized="workspace"
+    fi
+    printf '%s' "$sanitized"
 }
 
 DOCKER_ARGS=()
@@ -54,6 +108,7 @@ OPENCODE_SYNC_HOST_AUTH="${OPENCODE_SYNC_HOST_AUTH:-1}"
 OPENCODE_SYNC_CONFIG_CACHE="${OPENCODE_SYNC_CONFIG_CACHE:-1}"
 OPENCODE_SYNC_CONFIG_STATE="${OPENCODE_SYNC_CONFIG_STATE:-1}"
 OPENCODE_SYNC_CONFIG_FORCE="${OPENCODE_SYNC_CONFIG_FORCE:-0}"
+WEB_PORT="${OPENCODE_WEB_PORT:-4096}"
 
 # Host OpenCode directories across all four XDG base categories.
 # OPENCODE_HOST_STATE_DIR is retained as the data-dir override for backwards
@@ -74,15 +129,25 @@ CONTAINER_CONFIG_PATH="$CONTAINER_HOME/.config/opencode"
 CONTAINER_DATA_PATH="$CONTAINER_HOME/.local/share/opencode"
 CONTAINER_CACHE_PATH="$CONTAINER_HOME/.cache/opencode"
 CONTAINER_STATE_PATH="$CONTAINER_HOME/.local/state/opencode"
+WEB_CREDENTIALS_DIR="$OPENCODE_CONTAINER_HOME/web-server"
+WEB_ENTRYPOINT="$SCRIPT_DIR/scripts/web-server-entrypoint.sh"
+WEB_OWNERSHIP_LABEL_KEY="io.opencode-containment.web-server"
+WEB_OWNERSHIP_LABEL_VALUE="true"
+WEB_LEGACY_LABEL_KEY="io.opencode-containment.web-launch-id"
 
 show_help() {
     cat <<EOF
 Usage: opencode-container [OPTIONS] [-- ARGS...]
+       opencode-container [COMMON OPTIONS] --web-server [start|stop|status] [--web-port PORT] [--network-accessible]
 
 Options:
   --profile PROFILE   Profile to use: secure or native (default: OPENCODE_PROFILE or secure)
   --image IMAGE       Container image to use (default: OPENCODE_IMAGE or opencode-containment:latest)
   --workspace DIR     Workspace directory to mount (default: OPENCODE_WORKSPACE or current directory)
+  --web-server        Manage OpenCode's web server in a detached Docker container
+  --web-port PORT     Port for the web server (default: OPENCODE_WEB_PORT or 4096)
+  --network-accessible
+                       Publish a started web server to the LAN (start only)
   --sync-config       Re-seed OpenCode cache/state from host (forces overwrite), then exit
   --help              Show this help message
 
@@ -91,6 +156,8 @@ Behavior:
     Example: opencode-container auth ls
   With '--', arguments are executed as a raw container command.
     Example: opencode-container -- bash
+  --web-server starts the server by default; its commands are start, stop, and status.
+  --web-server cannot be combined with OpenCode or raw command arguments.
 
 Profiles:
   secure: Essential mounts only (opencode config, git config, workspace, persistent cache/state, SSH agent)
@@ -124,6 +191,11 @@ EOF
 ARGS=()
 RAW_COMMAND=0
 SYNC_CONFIG_ONLY=0
+WEB_SERVER=0
+WEB_PORT_SET=0
+WEB_SERVER_COMMAND="start"
+WEB_SERVER_COMMAND_SET=0
+WEB_NETWORK_ACCESSIBLE=0
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --profile)
@@ -137,6 +209,27 @@ while [[ $# -gt 0 ]]; do
         --workspace)
             WORKSPACE="$2"
             shift 2
+            ;;
+        --web-server)
+            if [[ "$WEB_SERVER" == "1" ]]; then
+                echo "Error: --web-server may only be specified once." >&2
+                exit 1
+            fi
+            WEB_SERVER=1
+            shift
+            ;;
+        --web-port)
+            if [[ $# -lt 2 || "$2" == --* ]]; then
+                echo "Error: --web-port requires a port value." >&2
+                exit 1
+            fi
+            WEB_PORT="$2"
+            WEB_PORT_SET=1
+            shift 2
+            ;;
+        --network-accessible)
+            WEB_NETWORK_ACCESSIBLE=1
+            shift
             ;;
         --sync-config)
             OPENCODE_SYNC_CONFIG_FORCE=1
@@ -154,40 +247,102 @@ while [[ $# -gt 0 ]]; do
             break
             ;;
         *)
+            if [[ "$WEB_SERVER" == "1" ]]; then
+                if [[ "$WEB_SERVER_COMMAND_SET" == "0" ]]; then
+                    case "$1" in
+                        start|stop|status)
+                            WEB_SERVER_COMMAND="$1"
+                            WEB_SERVER_COMMAND_SET=1
+                            shift
+                            ;;
+                        *)
+                            echo "Error: Unknown web server command '$1'. Use start, stop, or status." >&2
+                            exit 1
+                            ;;
+                    esac
+                    continue
+                fi
+                echo "Error: --web-server $WEB_SERVER_COMMAND cannot be combined with additional arguments." >&2
+                exit 1
+            fi
             ARGS+=("$1")
             shift
             ;;
     esac
 done
 
-# Validate workspace to prevent host OS breakage.
+if [[ "$WEB_SERVER" == "1" ]]; then
+    if [[ "$SYNC_CONFIG_ONLY" == "1" ]]; then
+        echo "Error: --web-server cannot be combined with --sync-config." >&2
+        exit 1
+    fi
+    if [[ "$RAW_COMMAND" == "1" || ${#ARGS[@]} -ne 0 ]]; then
+        echo "Error: --web-server cannot be combined with OpenCode or raw command arguments." >&2
+        exit 1
+    fi
+    if [[ "$WEB_NETWORK_ACCESSIBLE" == "1" && "$WEB_SERVER_COMMAND" != "start" ]]; then
+        echo "Error: --network-accessible is only valid with --web-server start." >&2
+        exit 1
+    fi
+    if ! [[ "$WEB_PORT" =~ ^[1-9][0-9]{0,4}$ ]] || ((10#$WEB_PORT > 65535)); then
+        echo "Error: Web server port must be an integer from 1 to 65535." >&2
+        exit 1
+    fi
+elif [[ "$WEB_PORT_SET" == "1" || "$WEB_NETWORK_ACCESSIBLE" == "1" ]]; then
+    if [[ "$WEB_PORT_SET" == "1" ]]; then
+        echo "Error: --web-port requires --web-server." >&2
+    else
+        echo "Error: --network-accessible requires --web-server start." >&2
+    fi
+    exit 1
+fi
+
+# Validate start/run workspaces to prevent host OS breakage. Lifecycle commands
+# only address already-created Docker resources, so they retain the supplied
+# canonical path even if it no longer exists and never require the caller to be
+# in or below that workspace.
 # --sync-config only re-seeds cache/state and never launches a container, so it
 # does not need a valid workspace or Docker.
 if [[ "${SYNC_CONFIG_ONLY:-0}" != "1" ]]; then
-    REAL_HOME="$(resolve_path "$HOME")"
-    if [[ ! -e "$WORKSPACE" ]]; then
-        echo "Error: Workspace path does not exist: $WORKSPACE" >&2
-        exit 1
-    fi
-    if [[ ! -d "$WORKSPACE" ]]; then
-        echo "Error: Workspace path is not a directory: $WORKSPACE" >&2
-        exit 1
-    fi
-    REAL_WORKSPACE="$(resolve_path "$WORKSPACE")"
-    START_DIR="$(resolve_path "$PWD")"
-    if [[ "$REAL_WORKSPACE" == "/" || "$REAL_WORKSPACE" == "$REAL_HOME" ]]; then
-        echo "Error: For security reasons, mounting '/' or '$HOME' as the workspace is not allowed." >&2
-        exit 1
-    fi
-    if [[ "$REAL_WORKSPACE" != "$START_DIR" && "$REAL_WORKSPACE" != "$START_DIR"/* ]]; then
-        echo "Error: Workspace must be the current directory or one of its subdirectories." >&2
-        exit 1
+    if [[ "$WEB_SERVER" == "1" && "$WEB_SERVER_COMMAND" != "start" ]]; then
+        REAL_WORKSPACE="$(resolve_web_lifecycle_workspace "$WORKSPACE")" || {
+            echo "Error: Could not resolve web server workspace path: $WORKSPACE" >&2
+            exit 1
+        }
+    else
+        REAL_HOME="$(resolve_path "$HOME")"
+        if [[ ! -e "$WORKSPACE" ]]; then
+            echo "Error: Workspace path does not exist: $WORKSPACE" >&2
+            exit 1
+        fi
+        if [[ ! -d "$WORKSPACE" ]]; then
+            echo "Error: Workspace path is not a directory: $WORKSPACE" >&2
+            exit 1
+        fi
+        REAL_WORKSPACE="$(resolve_path "$WORKSPACE")"
+        START_DIR="$(resolve_path "$PWD")"
+        if [[ "$REAL_WORKSPACE" == "/" || "$REAL_WORKSPACE" == "$REAL_HOME" ]]; then
+            echo "Error: For security reasons, mounting '/' or '$HOME' as the workspace is not allowed." >&2
+            exit 1
+        fi
+        if [[ "$REAL_WORKSPACE" != "$START_DIR" && "$REAL_WORKSPACE" != "$START_DIR"/* ]]; then
+            echo "Error: Workspace must be the current directory or one of its subdirectories." >&2
+            exit 1
+        fi
     fi
 
     # Check prerequisites
     if ! command -v docker >/dev/null 2>&1; then
         echo "Error: docker is not installed or not in PATH." >&2
         exit 1
+    fi
+
+    if [[ "$WEB_SERVER" == "1" ]]; then
+        workspace_hash="$(printf '%s' "$REAL_WORKSPACE" | cksum)"
+        workspace_hash="${workspace_hash%% *}"
+        WEB_CONTAINER_NAME="opencode-web-$(sanitize_web_container_name "$(basename "$REAL_WORKSPACE")")-${workspace_hash}-${WEB_PORT}"
+        WEB_NETWORK_NAME="${WEB_CONTAINER_NAME}-network"
+        WEB_CREDENTIALS_FILE="$WEB_CREDENTIALS_DIR/${WEB_CONTAINER_NAME}.credentials"
     fi
 fi
 
@@ -295,6 +450,571 @@ copy_plugin_meta() {
     mv -f -- "$tmp" "$dst"
 }
 
+stat_file_mode() {
+    local path="$1"
+
+    case "$path" in
+        -*) path="./$path" ;;
+    esac
+    if stat -f '%Lp' "$path" >/dev/null 2>&1; then
+        stat -f '%Lp' "$path"
+    else
+        stat -c '%a' -- "$path"
+    fi
+}
+
+stat_file_size() {
+    local path="$1"
+
+    case "$path" in
+        -*) path="./$path" ;;
+    esac
+    if stat -f '%z' "$path" >/dev/null 2>&1; then
+        stat -f '%z' "$path"
+    else
+        stat -c '%s' -- "$path"
+    fi
+}
+
+read_web_credentials() {
+    local mode size username_line password_line extra_line
+
+    if [[ -L "$WEB_CREDENTIALS_FILE" || ! -f "$WEB_CREDENTIALS_FILE" ]]; then
+        echo "Error: Web server credentials path is not a regular file: $WEB_CREDENTIALS_FILE" >&2
+        return 1
+    fi
+    if [[ ! -O "$WEB_CREDENTIALS_FILE" ]]; then
+        echo "Error: Web server credentials file is not owned by the current user: $WEB_CREDENTIALS_FILE" >&2
+        return 1
+    fi
+    mode="$(stat_file_mode "$WEB_CREDENTIALS_FILE")" || return 1
+    if [[ "$mode" != "600" ]]; then
+        echo "Error: Web server credentials file must have mode 0600: $WEB_CREDENTIALS_FILE" >&2
+        return 1
+    fi
+    # The fixed format is 141 bytes, including both required trailing newlines.
+    size="$(stat_file_size "$WEB_CREDENTIALS_FILE")" || return 1
+    if [[ "$size" != "141" ]]; then
+        echo "Error: Web server credentials file is malformed: $WEB_CREDENTIALS_FILE" >&2
+        return 1
+    fi
+
+    if ! exec 3< "$WEB_CREDENTIALS_FILE" \
+        || ! IFS= read -r username_line <&3 \
+        || ! IFS= read -r password_line <&3; then
+        exec 3<&- || true
+        echo "Error: Web server credentials file is malformed: $WEB_CREDENTIALS_FILE" >&2
+        return 1
+    fi
+    if IFS= read -r extra_line <&3; then
+        exec 3<&-
+        echo "Error: Web server credentials file is malformed: $WEB_CREDENTIALS_FILE" >&2
+        return 1
+    fi
+    exec 3<&-
+
+    if ! [[ "$username_line" =~ ^OPENCODE_SERVER_USERNAME=(opencode-[0-9a-f]{16})$ ]] \
+        || ! [[ "$password_line" =~ ^OPENCODE_SERVER_PASSWORD=([0-9a-f]{64})$ ]]; then
+        echo "Error: Web server credentials file is malformed: $WEB_CREDENTIALS_FILE" >&2
+        return 1
+    fi
+
+    WEB_USERNAME="${username_line#OPENCODE_SERVER_USERNAME=}"
+    WEB_PASSWORD="${password_line#OPENCODE_SERVER_PASSWORD=}"
+}
+
+prepare_web_credentials_directory() {
+    local mode
+
+    if [[ -L "$WEB_CREDENTIALS_DIR" || ( -e "$WEB_CREDENTIALS_DIR" && ! -d "$WEB_CREDENTIALS_DIR" ) ]]; then
+        echo "Error: Web server credentials directory is not a directory: $WEB_CREDENTIALS_DIR" >&2
+        return 1
+    fi
+    if ! (umask 077; mkdir -p -- "$WEB_CREDENTIALS_DIR"); then
+        echo "Error: Could not create web server credentials directory: $WEB_CREDENTIALS_DIR" >&2
+        return 1
+    fi
+    if [[ -L "$WEB_CREDENTIALS_DIR" || ! -d "$WEB_CREDENTIALS_DIR" || ! -O "$WEB_CREDENTIALS_DIR" ]]; then
+        echo "Error: Web server credentials directory is insecure: $WEB_CREDENTIALS_DIR" >&2
+        return 1
+    fi
+    mode="$(stat_file_mode "$WEB_CREDENTIALS_DIR")" || return 1
+    if [[ "$mode" != "700" ]]; then
+        echo "Error: Web server credentials directory must have mode 0700: $WEB_CREDENTIALS_DIR" >&2
+        return 1
+    fi
+}
+
+create_web_credentials() {
+    local username password
+
+    prepare_web_credentials_directory || return 1
+    if [[ -e "$WEB_CREDENTIALS_FILE" || -L "$WEB_CREDENTIALS_FILE" ]]; then
+        read_web_credentials
+        return
+    fi
+
+    username="opencode-$(od -An -N 8 -tx1 /dev/urandom | tr -d ' \n')"
+    password="$(od -An -N 32 -tx1 /dev/urandom | tr -d ' \n')"
+    if ! [[ "$username" =~ ^opencode-[0-9a-f]{16}$ && "$password" =~ ^[0-9a-f]{64}$ ]]; then
+        echo "Error: Could not generate web server credentials." >&2
+        return 1
+    fi
+
+    WEB_CREDENTIALS_TEMP_FILE="$WEB_CREDENTIALS_DIR/.credentials.$WEB_LAUNCH_TOKEN"
+    if ! (umask 077; set -C; : > "$WEB_CREDENTIALS_TEMP_FILE"); then
+        echo "Error: Could not create temporary web server credentials." >&2
+        return 1
+    fi
+    if ! chmod 600 -- "$WEB_CREDENTIALS_TEMP_FILE" \
+        || ! printf 'OPENCODE_SERVER_USERNAME=%s\nOPENCODE_SERVER_PASSWORD=%s\n' "$username" "$password" > "$WEB_CREDENTIALS_TEMP_FILE"; then
+        rm -f -- "$WEB_CREDENTIALS_TEMP_FILE"
+        WEB_CREDENTIALS_TEMP_FILE=""
+        echo "Error: Could not write web server credentials." >&2
+        return 1
+    fi
+
+    # link(2) refuses to overwrite an existing path, so this publishes the file
+    # atomically. If another launcher won the race, validate and use its file.
+    if ln -- "$WEB_CREDENTIALS_TEMP_FILE" "$WEB_CREDENTIALS_FILE" 2>/dev/null; then
+        rm -f -- "$WEB_CREDENTIALS_TEMP_FILE"
+        WEB_CREDENTIALS_TEMP_FILE=""
+    else
+        rm -f -- "$WEB_CREDENTIALS_TEMP_FILE"
+        WEB_CREDENTIALS_TEMP_FILE=""
+        if [[ -e "$WEB_CREDENTIALS_FILE" || -L "$WEB_CREDENTIALS_FILE" ]]; then
+            read_web_credentials
+            return
+        fi
+        echo "Error: Could not publish web server credentials: $WEB_CREDENTIALS_FILE" >&2
+        return 1
+    fi
+
+    read_web_credentials
+}
+
+create_web_network() {
+    local inspect_result
+
+    # Never attach a new server to a pre-existing network, including one that
+    # happens to carry our labels. It may be a stale or concurrently-created
+    # resource, and its endpoints cannot be safely attributed to this launch.
+    if inspect_web_network; then
+        echo "Error: Web server network '$WEB_NETWORK_NAME' already exists." >&2
+        return 1
+    else
+        inspect_result=$?
+    fi
+    case "$inspect_result" in
+        1) ;;
+        2)
+            echo "Error: Refusing to use unowned web server network '$WEB_NETWORK_NAME'." >&2
+            return 1
+            ;;
+        *)
+            return 1
+            ;;
+    esac
+
+    # Cleanup re-checks this per-launch label, so a signal after Docker creates
+    # the network cannot leave this invocation's network orphaned.
+    if docker network create \
+        --driver bridge \
+        --label "$WEB_OWNERSHIP_LABEL_KEY=$WEB_OWNERSHIP_LABEL_VALUE" \
+        --label "$WEB_LEGACY_LABEL_KEY=$WEB_LAUNCH_TOKEN" \
+        "$WEB_NETWORK_NAME" >/dev/null; then
+        return
+    fi
+
+    # A failed create can race with another creator. Do not adopt the resulting
+    # network, even when its labels look owned.
+    if inspect_web_network; then
+        echo "Error: Web server network '$WEB_NETWORK_NAME' already exists." >&2
+    else
+        inspect_result=$?
+        case "$inspect_result" in
+            1)
+                echo "Error: Could not create web server network '$WEB_NETWORK_NAME'." >&2
+                ;;
+            2)
+                echo "Error: Refusing to use unowned web server network '$WEB_NETWORK_NAME'." >&2
+                ;;
+        esac
+    fi
+    return 1
+}
+
+web_server_http_status() {
+    local status
+
+    if status="$(curl --disable --silent --location --noproxy 127.0.0.1 --output /dev/null --write-out '%{http_code}' --max-time 2 "$@")"; then
+        printf '%s\n' "$status"
+    else
+        printf '%s\n' "$status"
+        return 1
+    fi
+}
+
+wait_for_web_server() {
+    local url="$1" unauthenticated_status="unavailable" authenticated_status="not attempted" attempt
+
+    WEB_CURL_AUTH_FILE="$WEB_CREDENTIALS_DIR/.curl-auth.$WEB_LAUNCH_TOKEN"
+    if ! (umask 077; set -C; : > "$WEB_CURL_AUTH_FILE"); then
+        echo "Error: Could not create temporary authentication configuration." >&2
+        return 1
+    fi
+    if ! printf 'user = "%s:%s"\n' "$WEB_USERNAME" "$WEB_PASSWORD" > "$WEB_CURL_AUTH_FILE"; then
+        rm -f -- "$WEB_CURL_AUTH_FILE"
+        WEB_CURL_AUTH_FILE=""
+        echo "Error: Could not write temporary authentication configuration." >&2
+        return 1
+    fi
+
+    for ((attempt = 1; attempt <= 15; attempt++)); do
+        unauthenticated_status="$(web_server_http_status "$url" || true)"
+        if [[ "$unauthenticated_status" == "401" ]]; then
+            authenticated_status="$(web_server_http_status --config "$WEB_CURL_AUTH_FILE" "$url" || true)"
+            if [[ "$authenticated_status" =~ ^2[0-9]{2}$ ]]; then
+                rm -f -- "$WEB_CURL_AUTH_FILE"
+                WEB_CURL_AUTH_FILE=""
+                return 0
+            fi
+        fi
+        sleep 1
+    done
+
+    rm -f -- "$WEB_CURL_AUTH_FILE"
+    WEB_CURL_AUTH_FILE=""
+    echo "Error: Web server readiness/authentication check failed (unauthenticated status: $unauthenticated_status; authenticated status: $authenticated_status)." >&2
+    return 1
+}
+
+create_web_launch_token() {
+    WEB_LAUNCH_TOKEN="$(od -An -N 16 -tx1 /dev/urandom | tr -d ' \n')"
+    if ! [[ "$WEB_LAUNCH_TOKEN" =~ ^[0-9a-f]{32}$ ]]; then
+        echo "Error: Could not create web server launch token." >&2
+        return 1
+    fi
+}
+
+capture_failed_web_container() {
+    local inspected_container candidate_id candidate_token
+
+    inspected_container="$(docker container inspect \
+        --format "{{.Id}} {{index .Config.Labels \"$WEB_LEGACY_LABEL_KEY\"}}" \
+        "$WEB_CONTAINER_NAME" 2>/dev/null || true)"
+    candidate_id="${inspected_container%% *}"
+    candidate_token="${inspected_container#* }"
+    if [[ "$candidate_id" =~ ^[0-9a-f]{12,64}$ && "$candidate_token" == "$WEB_LAUNCH_TOKEN" ]]; then
+        WEB_CONTAINER_ID="$candidate_id"
+    fi
+}
+
+web_network_id_owned_by_launch() {
+    local inspected_network network_id network_token
+
+    inspected_network="$(docker network inspect \
+        --format "{{.Id}} {{index .Labels \"$WEB_LEGACY_LABEL_KEY\"}}" \
+        "$WEB_NETWORK_NAME" 2>/dev/null || true)"
+    network_id="${inspected_network%% *}"
+    network_token="${inspected_network#* }"
+    if [[ "$network_id" =~ ^[0-9a-f]{12,64}$ && "$network_token" == "$WEB_LAUNCH_TOKEN" ]]; then
+        printf '%s\n' "$network_id"
+    else
+        return 1
+    fi
+}
+
+cleanup_web_temporary_files() {
+    if [[ -n "${WEB_CREDENTIALS_TEMP_FILE:-}" ]]; then
+        rm -f -- "$WEB_CREDENTIALS_TEMP_FILE"
+        WEB_CREDENTIALS_TEMP_FILE=""
+    fi
+    if [[ -n "${WEB_CURL_AUTH_FILE:-}" ]]; then
+        rm -f -- "$WEB_CURL_AUTH_FILE"
+        WEB_CURL_AUTH_FILE=""
+    fi
+}
+
+cleanup_web_server() {
+    local network_id
+
+    if [[ "${WEB_CLEANUP_ACTIVE:-0}" != "1" ]]; then
+        return 0
+    fi
+    cleanup_web_temporary_files
+    if [[ -z "${WEB_CONTAINER_ID:-}" && -n "${WEB_LAUNCH_TOKEN:-}" ]]; then
+        capture_failed_web_container
+    fi
+    if [[ -n "${WEB_CONTAINER_ID:-}" ]]; then
+        echo "Web server logs for '$WEB_CONTAINER_ID':" >&2
+        docker logs "$WEB_CONTAINER_ID" >&2 || true
+        docker rm -f "$WEB_CONTAINER_ID" >&2 || true
+    fi
+    if network_id="$(web_network_id_owned_by_launch)"; then
+        docker network rm "$network_id" >&2 || true
+    fi
+    return 0
+}
+
+emit_web_server_details() {
+    local bind_mode stop_command
+
+    if [[ "$WEB_NETWORK_ACCESSIBLE" == "1" ]]; then
+        bind_mode="network-accessible"
+    else
+        bind_mode="loopback"
+    fi
+    stop_command="$(web_server_stop_command)"
+    cat <<EOF
+OpenCode web server is running.
+  URL: http://127.0.0.1:$WEB_PORT
+  Bind: $bind_mode
+  Basic Auth credentials: $WEB_CREDENTIALS_FILE
+  Container ID: $WEB_CONTAINER_ID
+  Network: $WEB_NETWORK_NAME
+  Stop and remove: $stop_command
+EOF
+}
+
+web_server_stop_command() {
+    local workspace_argument
+
+    printf -v workspace_argument '%q' "$REAL_WORKSPACE"
+    printf 'opencode-container --workspace %s --web-server stop --web-port %s' "$workspace_argument" "$WEB_PORT"
+}
+
+web_resource_is_owned() {
+    local ownership_label="$1" legacy_launch_token="$2"
+
+    [[ "$ownership_label" == "$WEB_OWNERSHIP_LABEL_VALUE" \
+        || "$legacy_launch_token" =~ ^[0-9a-f]{32}$ ]]
+}
+
+inspect_web_container() {
+    local inspected_container ownership_label legacy_launch_token extra
+
+    WEB_INSPECTED_CONTAINER_ID=""
+    WEB_INSPECTED_CONTAINER_RUNNING=""
+    if inspected_container="$(docker container inspect \
+        --format "{{.Id}}|{{index .Config.Labels \"$WEB_OWNERSHIP_LABEL_KEY\"}}|{{index .Config.Labels \"$WEB_LEGACY_LABEL_KEY\"}}|{{.State.Running}}" \
+        "$WEB_CONTAINER_NAME" 2>&1)"; then
+        :
+    elif [[ "$inspected_container" == *"No such container:"* || "$inspected_container" == *"no such container"* || "$inspected_container" == *"no container with name or ID"* ]]; then
+        return 1
+    else
+        echo "Error: Could not inspect web server container '$WEB_CONTAINER_NAME': $inspected_container" >&2
+        return 3
+    fi
+    IFS='|' read -r WEB_INSPECTED_CONTAINER_ID ownership_label legacy_launch_token WEB_INSPECTED_CONTAINER_RUNNING extra <<< "$inspected_container"
+    if [[ "${inspected_container//[^|]/}" != "|||" || -n "$extra" || ! "$WEB_INSPECTED_CONTAINER_ID" =~ ^[0-9a-f]{12,64}$ || ( "$WEB_INSPECTED_CONTAINER_RUNNING" != "true" && "$WEB_INSPECTED_CONTAINER_RUNNING" != "false" ) ]]; then
+        echo "Error: Web server container inspection returned an invalid format for '$WEB_CONTAINER_NAME'." >&2
+        return 3
+    fi
+    web_resource_is_owned "$ownership_label" "$legacy_launch_token" || return 2
+}
+
+inspect_web_network() {
+    local inspected_network ownership_label legacy_launch_token extra
+
+    WEB_INSPECTED_NETWORK_ID=""
+    if inspected_network="$(docker network inspect \
+        --format "{{.Id}}|{{index .Labels \"$WEB_OWNERSHIP_LABEL_KEY\"}}|{{index .Labels \"$WEB_LEGACY_LABEL_KEY\"}}" \
+        "$WEB_NETWORK_NAME" 2>&1)"; then
+        :
+    elif [[ "$inspected_network" == *"No such network:"* || "$inspected_network" == *network*not\ found* ]]; then
+        return 1
+    else
+        echo "Error: Could not inspect web server network '$WEB_NETWORK_NAME': $inspected_network" >&2
+        return 3
+    fi
+    IFS='|' read -r WEB_INSPECTED_NETWORK_ID ownership_label legacy_launch_token extra <<< "$inspected_network"
+    if [[ "${inspected_network//[^|]/}" != "||" || -n "$extra" || ! "$WEB_INSPECTED_NETWORK_ID" =~ ^[0-9a-f]{12,64}$ ]]; then
+        echo "Error: Web server network inspection returned an invalid format for '$WEB_NETWORK_NAME'." >&2
+        return 3
+    fi
+    web_resource_is_owned "$ownership_label" "$legacy_launch_token" || return 2
+}
+
+web_credentials_state() {
+    if [[ -f "$WEB_CREDENTIALS_FILE" && ! -L "$WEB_CREDENTIALS_FILE" ]]; then
+        printf 'present\n'
+    else
+        printf 'missing\n'
+    fi
+}
+
+web_container_bind_mode() {
+    local bindings binding has_binding=0 has_network_accessible_binding=0
+
+    if ! bindings="$(docker container inspect \
+        --format "{{range (index .NetworkSettings.Ports \"$WEB_PORT/tcp\")}}{{println .HostIp}}{{end}}" \
+        "$WEB_INSPECTED_CONTAINER_ID" 2>&1)"; then
+        echo "Error: Could not inspect web server port bindings for '$WEB_INSPECTED_CONTAINER_ID': $bindings" >&2
+        return 1
+    fi
+    while IFS= read -r binding; do
+        [[ -n "$binding" ]] || continue
+        has_binding=1
+        case "$binding" in
+            127.*|::1) ;;
+            0.0.0.0|::|*) has_network_accessible_binding=1 ;;
+        esac
+    done <<< "$bindings"
+
+    if [[ "$has_network_accessible_binding" == "1" ]]; then
+        printf 'network-accessible\n'
+    elif [[ "$has_binding" == "1" ]]; then
+        printf 'loopback\n'
+    else
+        printf 'unknown\n'
+    fi
+}
+
+require_safe_web_server_runtime() {
+    local server_version major_version
+
+    # Podman does not use Docker's published-port implementation. For Docker,
+    # require the Engine release that fixed localhost publication on local L2
+    # networks rather than silently relying on a potentially exposed bind.
+    if [[ "$RUNTIME_VERSION" == podman* ]]; then
+        return 0
+    fi
+    if ! server_version="$(docker version --format '{{.Server.Version}}' 2>/dev/null)" \
+        || ! [[ "$server_version" =~ ^([0-9]+)\. ]]; then
+        echo "Error: Could not determine Docker Engine version; Docker Engine 28 or later is required for --web-server." >&2
+        return 1
+    fi
+    major_version="${BASH_REMATCH[1]}"
+    if ((10#$major_version < 28)); then
+        echo "Error: Docker Engine 28 or later is required for --web-server because older Docker versions can expose localhost-published ports to other hosts on the local network." >&2
+        return 1
+    fi
+}
+
+show_web_server_status() {
+    local container_result=0 network_result=0 service="absent" bind_mode="unavailable"
+    local container_id="absent" network_id="absent" credentials_state
+
+    if inspect_web_container; then
+        container_id="$WEB_INSPECTED_CONTAINER_ID"
+        if [[ "$WEB_INSPECTED_CONTAINER_RUNNING" == "true" ]]; then
+            service="running"
+        else
+            service="stopped"
+        fi
+    else
+        container_result=$?
+    fi
+    if inspect_web_network; then
+        network_id="$WEB_INSPECTED_NETWORK_ID"
+    else
+        network_result=$?
+    fi
+    if [[ "$container_result" == "3" || "$network_result" == "3" ]]; then
+        return 1
+    fi
+    [[ "$container_result" == "2" ]] && container_id="unmanaged"
+    [[ "$network_result" == "2" ]] && network_id="unmanaged"
+    if [[ "$service" == "running" ]]; then
+        bind_mode="$(web_container_bind_mode)" || return 1
+    fi
+    credentials_state="$(web_credentials_state)"
+
+    cat <<EOF
+OpenCode web server status:
+  Service: $service
+  Bind: $bind_mode
+  Container name: $WEB_CONTAINER_NAME
+  Container ID: $container_id
+  Network name: $WEB_NETWORK_NAME
+  Network ID: $network_id
+  Credentials: $credentials_state
+EOF
+}
+
+stop_web_server() {
+    local container_result=0 network_result=0 credentials_state stop_status=0
+
+    if inspect_web_container; then
+        :
+    else
+        container_result=$?
+    fi
+    if inspect_web_network; then
+        :
+    else
+        network_result=$?
+    fi
+    if [[ "$container_result" == "3" || "$network_result" == "3" ]]; then
+        return 1
+    fi
+
+    if [[ "$container_result" == "0" ]]; then
+        if docker rm -f "$WEB_INSPECTED_CONTAINER_ID"; then
+            echo "Removed web server container '$WEB_INSPECTED_CONTAINER_ID'."
+        else
+            echo "Error: Could not remove web server container '$WEB_INSPECTED_CONTAINER_ID'." >&2
+            stop_status=1
+        fi
+    elif [[ "$container_result" == "2" ]]; then
+        echo "Error: Refusing to remove unowned container '$WEB_CONTAINER_NAME'." >&2
+        stop_status=1
+    fi
+
+    if [[ "$network_result" == "0" ]]; then
+        if docker network rm "$WEB_INSPECTED_NETWORK_ID"; then
+            echo "Removed web server network '$WEB_INSPECTED_NETWORK_ID'."
+        else
+            echo "Warning: Could not remove web server network '$WEB_INSPECTED_NETWORK_ID'; attached endpoints were not force-disconnected." >&2
+            stop_status=1
+        fi
+    elif [[ "$network_result" == "2" ]]; then
+        echo "Error: Refusing to remove unowned network '$WEB_NETWORK_NAME'." >&2
+        stop_status=1
+    fi
+
+    credentials_state="$(web_credentials_state)"
+    echo "Web server credentials preserved: $credentials_state ($WEB_CREDENTIALS_FILE)."
+    return "$stop_status"
+}
+
+web_server_exit_trap() {
+    local exit_status="$1"
+
+    trap - EXIT INT TERM
+    cleanup_web_server
+    exit "$exit_status"
+}
+
+web_server_signal_trap() {
+    local exit_status="$1"
+
+    trap - EXIT INT TERM
+    cleanup_web_server
+    exit "$exit_status"
+}
+
+activate_web_server_cleanup() {
+    WEB_CLEANUP_ACTIVE=1
+    trap 'web_server_exit_trap $?' EXIT
+    trap 'web_server_signal_trap 130' INT
+    trap 'web_server_signal_trap 143' TERM
+}
+
+if [[ "$WEB_SERVER" == "1" && "$WEB_SERVER_COMMAND" != "start" ]]; then
+    case "$WEB_SERVER_COMMAND" in
+        stop)
+            stop_web_server
+            exit $?
+            ;;
+        status)
+            show_web_server_status
+            exit $?
+            ;;
+    esac
+fi
+
 # Ensure persistent directories exist before seeding the isolated copies.
 mkdir -p "$OPENCODE_CONTAINER_HOME"/{cache,local}
 mkdir -p "$CONTAINER_DATA_DIR" "$CONTAINER_CACHE_DIR" "$CONTAINER_STATE_DIR"
@@ -338,8 +1058,10 @@ if [[ "$SYNC_CONFIG_ONLY" == "1" ]]; then
 fi
 
 # Base docker run arguments
+if [[ "$WEB_SERVER" != "1" ]]; then
+    DOCKER_ARGS+=(--rm)
+fi
 DOCKER_ARGS+=(
-    --rm
     --cap-drop=ALL
     --security-opt no-new-privileges:true
     --read-only
@@ -370,7 +1092,7 @@ pass_env_if_set \
     no_proxy \
     NODE_EXTRA_CA_CERTS
 
-if [[ -t 0 && -t 1 ]]; then
+if [[ "$WEB_SERVER" != "1" && -t 0 && -t 1 ]]; then
     DOCKER_ARGS+=(-it)
 fi
 
@@ -379,12 +1101,14 @@ fi
 # - Docker uses explicit uid:gid mapping.
 RUNTIME_VERSION="$(docker --version 2>/dev/null || true)"
 RW_MOUNT_OPTS="rw"
+RO_MOUNT_OPTS="ro"
 if [[ "$RUNTIME_VERSION" == podman* ]]; then
     DOCKER_ARGS+=(--userns keep-id)
     DOCKER_ARGS+=(--user "$(id -u):$(id -g)")
     # Podman on SELinux hosts needs relabeling for writable bind mounts.
     # Keep this Podman-only so Docker users keep default mount semantics.
     RW_MOUNT_OPTS="rw,Z"
+    RO_MOUNT_OPTS="ro,Z"
 else
     DOCKER_ARGS+=(--user "$(id -u):$(id -g)")
 fi
@@ -461,6 +1185,78 @@ elif [[ "$PROFILE" != "secure" ]]; then
 fi
 
 # Execute docker run
+if [[ "$WEB_SERVER" == "1" ]]; then
+    if ! command -v curl >/dev/null 2>&1; then
+        echo "Error: curl is required to verify the web server." >&2
+        exit 1
+    fi
+    if [[ ! -f "$WEB_ENTRYPOINT" ]]; then
+        echo "Error: Web server entrypoint is not a regular file: $WEB_ENTRYPOINT" >&2
+        exit 1
+    fi
+    require_safe_web_server_runtime || exit 1
+    if inspect_web_container; then
+        echo "Error: Web server container '$WEB_CONTAINER_NAME' already exists." >&2
+        echo "Stop and remove it with: $(web_server_stop_command)" >&2
+        exit 1
+    else
+        container_inspect_result=$?
+        if [[ "$container_inspect_result" != "1" ]]; then
+            if [[ "$container_inspect_result" == "2" ]]; then
+                echo "Error: Web server container '$WEB_CONTAINER_NAME' already exists but is not owned by this launcher." >&2
+                echo "Stop and remove it with: $(web_server_stop_command)" >&2
+            fi
+            exit 1
+        fi
+    fi
+    if [[ "$WEB_NETWORK_ACCESSIBLE" == "1" ]]; then
+        echo "WARNING: --network-accessible exposes this HTTP server and its Basic Auth credentials on your LAN. The server can access your workspace and provider credentials." >&2
+        WEB_BIND_ADDRESS="0.0.0.0"
+    else
+        WEB_BIND_ADDRESS="127.0.0.1"
+    fi
+    create_web_launch_token
+    WEB_CONTAINER_ID=""
+    WEB_CREDENTIALS_TEMP_FILE=""
+    WEB_CURL_AUTH_FILE=""
+    activate_web_server_cleanup
+    create_web_credentials
+    create_web_network
+    DOCKER_ARGS+=(
+        --detach
+        --name "$WEB_CONTAINER_NAME"
+        --label "$WEB_OWNERSHIP_LABEL_KEY=$WEB_OWNERSHIP_LABEL_VALUE"
+        --label "$WEB_LEGACY_LABEL_KEY=$WEB_LAUNCH_TOKEN"
+        --publish "${WEB_BIND_ADDRESS}:${WEB_PORT}:${WEB_PORT}"
+        --volume "$WEB_CREDENTIALS_FILE:/tmp/opencode-web-credentials:$RO_MOUNT_OPTS"
+        --volume "$WEB_ENTRYPOINT:/tmp/opencode-web-entrypoint:$RO_MOUNT_OPTS"
+        --network "$WEB_NETWORK_NAME"
+        # Override the image entrypoint so custom or stale images cannot skip
+        # credential loading; /bin/sh executes the mounted wrapper below.
+        --entrypoint /bin/sh
+    )
+
+    if ! WEB_CONTAINER_ID="$(docker run "${DOCKER_ARGS[@]}" "$IMAGE" /tmp/opencode-web-entrypoint "$WEB_PORT")" \
+        || ! [[ "$WEB_CONTAINER_ID" =~ ^[0-9a-f]{12,64}$ ]]; then
+        WEB_CONTAINER_ID=""
+        capture_failed_web_container
+        echo "Error: Could not start web server container '$WEB_CONTAINER_NAME'." >&2
+        exit 1
+    fi
+    if ! wait_for_web_server "http://127.0.0.1:$WEB_PORT/global/health"; then
+        exit 1
+    fi
+
+    if ! emit_web_server_details; then
+        echo "Error: Could not report web server launch details." >&2
+        exit 1
+    fi
+
+    WEB_CLEANUP_ACTIVE=0
+    trap - EXIT INT TERM
+    exit 0
+fi
+
 if [[ ${#ARGS[@]} -eq 0 ]]; then
     ARGS=(opencode)
 elif [[ "$RAW_COMMAND" != "1" ]]; then

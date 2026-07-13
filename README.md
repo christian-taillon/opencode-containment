@@ -53,6 +53,55 @@ opencode-container auth ls
 opencode-container models --refresh
 ```
 
+Start a Docker-only local web server with persistent Basic Auth credentials:
+
+```bash
+opencode-container --web-server start
+# Bare --web-server remains an alias for start.
+opencode-container --web-server
+# Optional alternate port:
+opencode-container --web-server start --web-port 4097
+# Inspect or stop the server for this workspace and port:
+opencode-container --web-server status --web-port 4097
+opencode-container --web-server stop --web-port 4097
+```
+
+The server is published only on `127.0.0.1`. The launcher requires Docker
+Engine 28 or later for web-server starts: Docker releases before 28.0.0 can
+expose localhost-published ports to other hosts on the same L2 network. The
+launcher waits until an unauthenticated request returns `401` and a request
+authenticated with the persisted credential file succeeds before printing its
+URL. Credentials are stored per workspace and port at
+`$OPENCODE_CONTAINER_HOME/web-server/<container-name>.credentials` with mode
+`0600` (the containing directory is mode `0700`). `status` reports only service,
+bind, resource, and credential-presence metadata; it does not send a request or
+read credentials. `stop` preserves the credentials file while removing verified
+owned resources. Use the exact `--workspace` path from the emitted teardown
+command for lifecycle operations: it is canonical and works from another
+directory, including after the workspace is deleted or renamed.
+
+To publish to the LAN, explicitly opt in for each start:
+
+```bash
+opencode-container --web-server start --network-accessible
+```
+
+This exposes an HTTP server and its Basic Auth credentials on the LAN. That
+server can access the mounted workspace and provider credentials, so do not use
+this option on untrusted networks. There is intentionally no environment default
+for network access.
+
+Each server uses its own user-defined Docker bridge network rather than the
+default bridge, preventing ordinary default-bridge containers from reaching it.
+It is not Docker's `--internal` network because OpenCode needs outbound access
+to provider APIs; it remains reachable from this host only through the
+loopback-published port by default. `--network-accessible` also publishes that
+port to the LAN. Containers explicitly attached to that network and Docker
+daemon administrators remain trusted.
+
+For this entrypoint-independent launch path, a custom `OPENCODE_IMAGE` must
+provide `/bin/sh` and the `opencode` executable.
+
 Use `--` only when you want to run a raw command in the container:
 
 ```bash
@@ -188,6 +237,7 @@ You can customize the environment with environment variables or a local override
 - `OPENCODE_PROFILE`: Override the runtime mode (`secure` or `native`). The recommended daily workflow is `make run`, which uses `native`.
 - `OPENCODE_IMAGE`: Override the default Docker image.
 - `OPENCODE_WORKSPACE`: Override the workspace directory to mount.
+- `OPENCODE_WEB_PORT`: Port for `opencode-container --web-server` (default: `4096`; overridden by `--web-port`). Starts publish only to `127.0.0.1` unless the explicit `--network-accessible` flag is supplied; credentials are scoped to its workspace-and-port container name under `$OPENCODE_CONTAINER_HOME/web-server/`.
 - `OPENCODE_OVERRIDES_FILE`: Optional JSON file to pass as `OPENCODE_CONFIG_CONTENT`.
 - `OPENCODE_CONTAINER_HOME`: Host directory for container persistent state (default: `$HOME/.local/share/opencode-container`).
 - Standard proxy env vars (`HTTP_PROXY`, `HTTPS_PROXY`, `ALL_PROXY`, `NO_PROXY`, lowercase variants) are passed through for both runtime and `make build` when set.
@@ -258,7 +308,7 @@ Config content is resolved in this order:
 
 Both launchers accept CLI flags that mirror many of these environment variables. Run the launcher with `--help` for the full list. For example:
 
-- `opencode-container --profile`, `--image`, `--workspace`, `--sync-config`, `--help`
+- `opencode-container --profile`, `--image`, `--workspace`, `--web-server`, `--web-port`, `--network-accessible`, `--sync-config`, `--help`
 - `opencode-sandbox --profile`, `--workspace`, `--name`, `--memory`, `--cpus`, `--template`, `--help`
 
 ### Build and Version Strategy
