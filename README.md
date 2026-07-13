@@ -6,42 +6,13 @@ A simple, highly configurable, native-feeling containment starter for OpenCode.
 
 Run OpenCode from SSH + tmux + neovim with a native workflow, while keeping strong host safety defaults. tmux runs on the host; the container ships neovim but not tmux. This project is intentionally minimal: a small launcher, a single image build, one local override hook, and a few helper targets you can adapt without digging through framework code.
 
-## Why
-
-- I run agentic work from a NUC over SSH, living in tmux and neovim where fast terminal workflows matter.
-- Many agent projects skip practical containment, even as prompt injection and tool-chain poisoning threats keep growing.
-- This aims to be an easy on-ramp: native feel first, with clear options to lock down harder.
-- The tone is practical on purpose: field notes, not framework worship.
-- It is a starting guide, not a final platform. Fork it, tune it, and make it your own.
+The tone is practical on purpose: field notes, not framework worship. It is a starting guide, not a final platform. Fork it, tune it, and make it your own.
 
 ## Scope
 
 - Built for OpenCode today.
 - Easy to adapt for other agent CLIs (Claude Code, Codex, Gemini, and similar tools) with small launcher/image changes.
 - Keep the core idea: native terminal UX, clear boundaries, and configurable hardening.
-
-## Features
-
-- Native CLI workflow over SSH/tmux/neovim (tmux is host-side; the image includes neovim)
-- Two backends: `container` and `sandbox`
-- Two profiles: `secure` (default) and `native`
-- One main daily workflow: `make run` (native mode)
-- Optional lower-integration mode: `make run-secure` (secure mode)
-- Prepared Neovim parser install directory inside the image
-- Read-only container root with explicit writable paths only
-- Workspace guardrails to block unsafe mounts
-- Read-only host config mounts + SSH agent forwarding (no key mounts)
-- Host `opencode login` auth mirrored into containment by default
-- One local-only override hook for personal config, mounts, and auth behavior
-- Optional proxy and custom CA passthrough for build/run environments
-- Local-only extra Alpine packages during builds without adding a new config system
-- More portable launcher path handling for macOS hosts
-
-## Editor Workflow
-
-- The workspace is bind-mounted from your host, so container file changes are visible immediately from host editors.
-- You can keep using VS Code, neovim, or any local editor without putting that editor inside the container.
-- This keeps container complexity low while preserving a native editing loop.
 
 ## Demo
 
@@ -55,13 +26,13 @@ This repo includes a prompt injection / data exfiltration demo under `demo/`. It
    cd opencode-containment
    ```
 2. Build the image and create local state directories:
-    ```bash
-    ./install.sh
-    ```
+   ```bash
+   ./install.sh
+   ```
 3. Start OpenCode in the contained native workflow:
-    ```bash
-    make run
-    ```
+   ```bash
+   make run
+   ```
 
 That is the normal path. The workspace is your current project directory, mounted read-write at `/workspace`; host config mounts stay read-only, and OpenCode auth is copied into isolated container state.
 
@@ -71,76 +42,37 @@ Useful follow-ups:
 make doctor      # check Docker/image/auth setup
 make update      # pull latest upstream pieces and rebuild
 make run-secure  # lower-integration container profile
+make run-sandbox # sandbox backend (stronger isolation)
 ```
 
 You can also pass OpenCode subcommands directly through the launcher:
 
-    ```bash
-    opencode-container auth ls
-    opencode-container models --refresh
-    ```
+```bash
+opencode-container auth ls
+opencode-container models --refresh
+```
 
 Use `--` only when you want to run a raw command in the container:
 
-    ```bash
-    opencode-container -- bash
-    ```
+```bash
+opencode-container -- bash
+```
 
 Re-seed host config into container state without launching a container:
 
-    ```bash
-    opencode-container --sync-config
-    # or
-    make sync-config
-    ```
-
-Optional: run the `sandbox` backend instead:
-
-   ```bash
-   make run-sandbox
-   ```
+```bash
+opencode-container --sync-config
+# or
+make sync-config
+```
 
 Host OpenCode auth from `~/.local/share/opencode` is mirrored into the container's persistent state automatically, so providers you have already logged into on the host should appear inside `make run` without extra setup. The host database is copied only during first-time container state initialization so container-created sessions remain resumable with `opencode-container -s <session-id>`.
 
-The launcher seeds state across all four XDG base categories:
-
-- **Config (`XDG_CONFIG_HOME`)**: mounted read-only and shared with the host
-- **Data (`XDG_DATA_HOME`)**: auth-adjacent files (`auth.json`, account data, MCP auth) are refreshed each launch; `opencode.db` is seeded first-init only
-- **Cache (`XDG_CACHE_HOME`)**: plugins, `models.json`, and quota caches are seeded first-init only
-- **State (`XDG_STATE_HOME`)**: `model.json`, `kv.json`, and `plugin-meta.json` are seeded first-init only, with host paths rewritten to container home paths
-
-For the sandbox backend, host OpenCode config is mounted read-only and host auth is copied into a sandbox-specific read-only auth mirror. Sandbox sessions and `opencode.db` remain sandbox-local, so native, container, and sandbox usage do not overwrite each other's session databases.
-
 If you are behind a proxy or need an internal CA bundle, set the standard proxy variables in your shell or `opencode-local.sh` before `make build` / `make run`. They are only passed through when explicitly set.
 
-To refresh an existing installation, run:
+## Backends and Profiles
 
-```bash
-make update
-```
-
-`make update` pulls the latest base image, rebuilds without Docker cache so package-manager installs, Rust stable, `uv`, and `marksman` are refreshed, and re-runs `make setup` without deleting existing container state.
-
-By default, this repo intentionally follows current upstream tooling: `ghcr.io/anomalyco/opencode:latest`, Rust `stable`, latest `uv`, latest `marksman`, and current Alpine packages from the base image repositories. If you need reproducible builds, pin the build args described in [Version Strategy](#version-strategy).
-
-## Runtime Modes
-
-This project is designed around one main path for daily use:
-
-- `make run` / `--profile native`: recommended default workflow
-- `make run-secure` / `--profile secure`: optional lower-integration mode
-
-Both modes exist, but the project is intentionally optimized around the native daily workflow so developers will actually use it.
-
-| Feature | `secure` Mode | `native` Mode |
-|---------|----------------------------|------------------|
-| Workspace Mount | Read-Write | Read-Write |
-| SSH Agent Socket | Forwarded | Forwarded |
-| Host Configs | Git, SSH Config (Read-Only) | Read-Only (git, ssh config) |
-| Editor Config | None | Read-Only config/plugins + RW state/cache |
-| Shell Config | Default | Container Default |
-
-## Backends
+### Backends
 
 - `container` backend: `bin/opencode-container` runs against the local Docker image and exposes the most host integration.
 - `sandbox` backend: `bin/opencode-sandbox` runs OpenCode inside Docker Sandboxes and gives `sbx` control over runtime isolation.
@@ -152,21 +84,70 @@ Both modes exist, but the project is intentionally optimized around the native d
 
 Default profiles differ between the two launchers. `bin/opencode-container` defaults to the `secure` profile when run directly. `bin/opencode-sandbox` defaults to the `native` profile when run directly. The Makefile targets (`make run`, `make run-native`, `make run-sandbox`) pass `--profile native` explicitly.
 
-## Security Model
+### Profiles
 
-Both backends are designed with security as a primary concern:
+This project is designed around one main path for daily use:
+
+- `make run` / `--profile native`: recommended default workflow
+- `make run-secure` / `--profile secure`: optional lower-integration mode
+
+| Feature | `secure` Mode | `native` Mode |
+|---------|---------------|---------------|
+| Workspace Mount | Read-Write | Read-Write |
+| SSH Agent Socket | Forwarded | Forwarded |
+| Host Configs | Git, SSH Config (Read-Only) | Read-Only (git, ssh config) |
+| Editor Config | None | Read-Only config/plugins + RW state/cache |
+| Shell Config | Default | Container Default |
+
+### Sandbox Backend Details
+
+Use `bin/opencode-sandbox` when you want the same repo workflow on top of Docker Sandboxes instead of the local Docker image. The `sandbox` backend keeps the same workspace guardrails and profile label, but lets `sbx` manage the sandbox filesystem, Docker daemon, and runtime isolation.
+
+Default sandbox sizing:
+
+```bash
+OPENCODE_SANDBOX_MEMORY=8g
+OPENCODE_SANDBOX_CPUS=4
+```
+
+Sandbox auto-naming: when `OPENCODE_SANDBOX_NAME` is not set, the launcher names the sandbox `opencode-<sanitized-basename>` where the workspace basename is lowercased and any characters other than alphanumerics, `.`, `+`, and `-` are replaced with `-`.
+
+Host auth mirror: host OpenCode auth is copied into a sandbox-specific read-only auth mirror (`$OPENCODE_SANDBOX_STATE_DIR/auth/auth.json`). On each launch a bootstrap script ensures the sandbox's `~/.local/share/opencode/auth.json` points to that mirror via a symlink. The mirror is refreshed from the host every launch; the symlink only recreates itself when needed.
+
+Default network allowlist: the committed `config/sbx-network-allow.txt` only includes Ollama Cloud domains. If you use another model or provider API, add its domains narrowly (for example `api.example.com:443`) and run `make setup-sandbox-policy` before launching the sandbox.
+
+Recommended host PATH on Debian-style systems:
+
+```bash
+export PATH="$HOME/.docker/sbx/bin:$HOME/.docker/sbx/libexec:/usr/sbin:/sbin:$PATH"
+```
+
+Quick checks:
+
+```bash
+make doctor-sandbox
+make setup-sandbox-policy
+bin/opencode-sandbox -- --continue
+```
+
+`make update` rebuilds only the local Docker image used by the container backend. Docker Sandboxes uses its own agent templates, and existing named sandboxes keep their filesystem layer until you remove or recreate them.
+
+## Security
+
+Both backends are designed with security as a primary concern. See [SECURITY_REPORT.md](SECURITY_REPORT.md) for the full threat model, mitigations, accepted risks, and known gaps.
+
+### Security Model
 
 - **Mounts**: The current workspace is mounted read-write to allow code modifications. Host configuration files (like `.gitconfig`, `.ssh/config`) are mounted read-only to prevent tampering.
 - **Excluded Mounts**: Private SSH keys and sensitive environment files are intentionally NOT mounted.
 - **SSH Agent**: Instead of mounting keys, the host's SSH agent socket is forwarded, allowing secure authentication without exposing credentials.
 - **Environment Variables**: The launchers keep runtime environment passing narrow and explicit.
-- **Hardening**: The `container` backend uses explicit container hardening; the `sandbox` backend delegates isolation to `sbx` and its microVM runtime.
+- **Hardening**: The `container` backend uses explicit container hardening (`--cap-drop=ALL`, `--security-opt no-new-privileges`, `--read-only`, `--tmpfs /tmp`, `--init`); the `sandbox` backend delegates isolation to `sbx` and its microVM runtime.
 - **Filesystem Containment**: The `container` backend uses a read-only root with explicit writable paths. The `sandbox` backend relies on `sbx` to manage sandbox state and isolation.
-- **Init Process**: The `container` backend runs Docker with `--init` so signal handling and zombie process reaping work correctly inside the hardened environment.
 - **Workspace Guardrails**: The launcher rejects unsafe workspace mounts (`/`, `$HOME`, or paths outside the starting directory tree).
 - **OpenCode Auth**: Host OpenCode login state is copied into the container's isolated persistent state before launch. This preserves provider visibility without mounting the entire host home directory.
 
-## Security Non-Negotiables
+### Security Non-Negotiables
 
 - Never mount `/`, `$HOME`, or paths outside the active project tree as the workspace.
 - Never mount private SSH keys, `.env`, or Docker sockets into the runtime.
@@ -174,82 +155,7 @@ Both backends are designed with security as a primary concern:
 - Treat `opencode-local.sh` as a trust boundary. It can weaken containment if you add unsafe mounts or privileges.
 - Prefer the `sandbox` backend when you want stronger runtime isolation than a local container can provide.
 
-## Command Choices
-
-- `make run`: Starts the native profile for daily use (better editor/shell UX)
-- `make run-secure`: Starts the secure profile with minimal integration
-- `make run-sandbox`: Starts the `sandbox` backend for stronger isolation
-- `make shell-install`: Installs both `opencode-container` and `opencode-sandbox` to `~/.local/bin`
-
-## Architecture
-
-```text
-+---------------------------+       +--------------------------+       +----------------------+
-| Host System               | ----> | bin/opencode-container   | ----> | Docker Image         |
-| - workspace               |       | - profile selection      |       | - OpenCode + tools   |
-| - ssh agent               |       | - mount guardrails       |       | - parser dir ready   |
-| - optional local config   |       | - local override hook    |       | - container-init     |
-+---------------------------+       +--------------------------+       +----------------------+
-             \
-              \
-               +--------------------------+       +----------------------+
-               | bin/opencode-sandbox     | ----> | Docker Sandboxes     |
-               | - workspace guardrails   |       | - isolated runtime   |
-               | - sbx resource flags     |       | - inner Docker       |
-               | - local env overrides    |       | - OpenCode agent     |
-               +--------------------------+       +----------------------+
-```
-
-The `demo/` directory and `.github/workflows/ci.yml` sit alongside this core: CI builds and scans the image, and the demo exercises the prompt-injection threat model that motivates the containment boundaries above.
-
-## Configuration
-
-You can customize the environment with environment variables or a local override script:
-
-- `OPENCODE_PROFILE`: Override the runtime mode (`secure` or `native`). The recommended daily workflow is `make run`, which uses `native`.
-- `OPENCODE_IMAGE`: Override the default Docker image.
-- `OPENCODE_WORKSPACE`: Override the workspace directory to mount.
-- `OPENCODE_OVERRIDES_FILE`: Optional JSON file to pass as `OPENCODE_CONFIG_CONTENT`.
-- Standard proxy env vars (`HTTP_PROXY`, `HTTPS_PROXY`, `ALL_PROXY`, `NO_PROXY`, lowercase variants) are passed through for both runtime and `make build` when set.
-- `NODE_EXTRA_CA_CERTS`: Optional custom CA bundle path passed through for runtime and builds when set.
-- `OPENCODE_BUILD_EXTRA_APK_PACKAGES`: Optional local-only extra Alpine packages to install during `make build`.
-- Build pin overrides: `RUST_TOOLCHAIN`, `UV_VERSION`, `UV_INSTALLER_SHA256`, `MARKSMAN_VERSION`, `MARKSMAN_SHA256_X86_64`, and `MARKSMAN_SHA256_AARCH64` can be set in `opencode-local.sh` before `make build`.
-- `GITHUB_TOKEN` / `GH_TOKEN`: Passed through to the container if set in the host environment.
-- `OPENCODE_SBX_BIN`: Override the `sbx` binary path for `bin/opencode-sandbox`.
-- `OPENCODE_SANDBOX_NAME`: Reuse or create a named sandbox.
-- `OPENCODE_SANDBOX_MEMORY`: Pass a memory limit to `sbx run` (default: `8g`).
-- `OPENCODE_SANDBOX_CPUS`: Pass a CPU count to `sbx run` (default: `4`).
-- `OPENCODE_SANDBOX_TEMPLATE`: Override the sandbox template image.
-- `OPENCODE_CONFIG_DIR`: Host OpenCode config directory mounted read-only into sandbox (default: `$HOME/.config/opencode`).
-- `OPENCODE_HOST_STATE_DIR`: Host OpenCode state directory used as the auth source (default: `$HOME/.local/share/opencode`).
-- `OPENCODE_HOST_CACHE_DIR`: Override the host cache directory used as a seed source (default: `$HOME/.cache/opencode`).
-- `OPENCODE_HOST_RUNTIME_STATE_DIR`: Override the host runtime state directory used as a seed source (default: `$HOME/.local/state/opencode`).
-- `OPENCODE_SANDBOX_STATE_DIR`: Host directory for sandbox support files such as the auth mirror (default: `$HOME/.local/share/opencode-sandbox`).
-- `OPENCODE_SYNC_CONFIG_FORCE`: Set to `1` to force re-seeding cache/state into container state, overwriting existing container copies.
-- `OPENCODE_CONTAINER_HOME`: Host directory for container persistent state (default: `$HOME/.local/share/opencode-container`).
-- `OPENCODE_SYNC_CONFIG_CACHE`: Set to `0` to skip cache-dir seeding (default: `1`).
-- `OPENCODE_SYNC_CONFIG_STATE`: Set to `0` to skip state-dir seeding (default: `1`).
-- `OPENCODE_BUILD_NO_CACHE`: Set to `1` to force `--no-cache` on `docker build`.
-- `IMAGE_NAME`: Override the image tag for build/run (default: `opencode-containment:latest`).
-
-For local customization, copy the tracked example file and keep your personal changes in `opencode-local.sh`:
-
-```bash
-cp opencode-local.example.sh opencode-local.sh
-```
-
-`bin/opencode-container` sources `opencode-local.sh` before `docker run`, so you can set default profiles, pass JSON config, add mounts or env vars, and sync local auth into the persistent container state without committing any of it.
-
-`bin/opencode-sandbox` also sources `opencode-local.sh`, but only environment-style settings apply there. Docker-specific `DOCKER_ARGS` customizations do not carry over because `sbx` owns the sandbox runtime and mount model. Host OpenCode config is readable inside the sandbox by design; keep secrets out of committed or shared config files.
-
-`make build` also sources `opencode-local.sh` for proxy/CA and extra APK package overrides. That keeps one local override flow for both runtime and build behavior.
-
-Both launchers accept CLI flags that mirror many of these environment variables. Run the launcher with `--help` for the full list. For example:
-
-- `opencode-container --profile`, `--image`, `--workspace`, `--sync-config`, `--help`
-- `opencode-sandbox --profile`, `--workspace`, `--name`, `--memory`, `--cpus`, `--template`, `--help`
-
-## Security: Local Overrides
+### Local Overrides
 
 `opencode-local.sh` is intentionally powerful. That keeps the repo small, but it also means you can punch holes in the safety model if you are careless.
 
@@ -273,82 +179,74 @@ By default, the launcher mirrors host OpenCode auth from `~/.local/share/opencod
 
 If you want a sanitized zsh setup, generate it locally in your own script and source or mount it from `opencode-local.sh`. The repo no longer manages that workflow for you.
 
-To install the `opencode-container` command globally in your shell, run:
+## Configuration
+
+You can customize the environment with environment variables or a local override script:
+
+- `OPENCODE_PROFILE`: Override the runtime mode (`secure` or `native`). The recommended daily workflow is `make run`, which uses `native`.
+- `OPENCODE_IMAGE`: Override the default Docker image.
+- `OPENCODE_WORKSPACE`: Override the workspace directory to mount.
+- `OPENCODE_OVERRIDES_FILE`: Optional JSON file to pass as `OPENCODE_CONFIG_CONTENT`.
+- `OPENCODE_CONTAINER_HOME`: Host directory for container persistent state (default: `$HOME/.local/share/opencode-container`).
+- Standard proxy env vars (`HTTP_PROXY`, `HTTPS_PROXY`, `ALL_PROXY`, `NO_PROXY`, lowercase variants) are passed through for both runtime and `make build` when set.
+- `NODE_EXTRA_CA_CERTS`: Optional custom CA bundle path passed through for runtime and builds when set.
+- `GITHUB_TOKEN` / `GH_TOKEN`: Passed through to the container if set in the host environment.
+- `OPENCODE_BUILD_EXTRA_APK_PACKAGES`: Optional local-only extra Alpine packages to install during `make build`.
+- `OPENCODE_BUILD_NO_CACHE`: Set to `1` to force `--no-cache` on `docker build`.
+- `IMAGE_NAME`: Override the image tag for build/run (default: `opencode-containment:latest`).
+- Build pin overrides: `RUST_TOOLCHAIN`, `UV_VERSION`, `UV_INSTALLER_SHA256`, `MARKSMAN_VERSION`, `MARKSMAN_SHA256_X86_64`, and `MARKSMAN_SHA256_AARCH64` can be set in `opencode-local.sh` before `make build`.
+- `OPENCODE_SYNC_HOST_AUTH`: Set to `0` to skip data-dir auth/account/db seeding (default: `1`).
+- `OPENCODE_SYNC_CONFIG_CACHE`: Set to `0` to skip cache-dir seeding (default: `1`).
+- `OPENCODE_SYNC_CONFIG_STATE`: Set to `0` to skip state-dir seeding (default: `1`).
+- `OPENCODE_SYNC_CONFIG_FORCE`: Set to `1` to force re-seeding cache/state into container state, overwriting existing container copies.
+- `OPENCODE_CONFIG_DIR`: Host OpenCode config directory mounted read-only into sandbox (default: `$HOME/.config/opencode`).
+- `OPENCODE_HOST_STATE_DIR`: Host OpenCode data directory used as the auth source (default: `$HOME/.local/share/opencode`).
+- `OPENCODE_HOST_CACHE_DIR`: Override the host cache directory used as a seed source (default: `$HOME/.cache/opencode`).
+- `OPENCODE_HOST_RUNTIME_STATE_DIR`: Override the host runtime state directory used as a seed source (default: `$HOME/.local/state/opencode`).
+- `OPENCODE_SANDBOX_STATE_DIR`: Host directory for sandbox support files such as the auth mirror (default: `$HOME/.local/share/opencode-sandbox`).
+- `OPENCODE_SBX_BIN`: Override the `sbx` binary path for `bin/opencode-sandbox`.
+- `OPENCODE_SANDBOX_NAME`: Reuse or create a named sandbox.
+- `OPENCODE_SANDBOX_MEMORY`: Pass a memory limit to `sbx run` (default: `8g`).
+- `OPENCODE_SANDBOX_CPUS`: Pass a CPU count to `sbx run` (default: `4`).
+- `OPENCODE_SANDBOX_TEMPLATE`: Override the sandbox template image.
+
+### XDG State Seeding
+
+The launcher seeds state across all four XDG base categories:
+
+- **Config (`XDG_CONFIG_HOME`)**: mounted read-only and shared with the host
+- **Data (`XDG_DATA_HOME`)**: `auth.json`, `account.json`, `mcp-auth.json` refreshed each launch; `opencode.db` seeded first-init only
+- **Cache (`XDG_CACHE_HOME`)**: plugins, `models.json`, and quota caches seeded first-init only
+- **State (`XDG_STATE_HOME`)**: `model.json`, `kv.json`, and `plugin-meta.json` seeded first-init only, with host paths rewritten to container home paths
+
+For the sandbox backend, host OpenCode config is mounted read-only and host auth is copied into a sandbox-specific read-only auth mirror. Sandbox sessions and `opencode.db` remain sandbox-local, so native, container, and sandbox usage do not overwrite each other's session databases.
+
+### Local Override Hook
+
+For local customization, copy the tracked example file and keep your personal changes in `opencode-local.sh`:
+
 ```bash
-make shell-install
+cp opencode-local.example.sh opencode-local.sh
 ```
 
-## Sandbox Backend
+`bin/opencode-container` sources `opencode-local.sh` before `docker run`, so you can set default profiles, pass JSON config, add mounts or env vars, and sync local auth into the persistent container state without committing any of it.
 
-Use `bin/opencode-sandbox` when you want the same repo workflow on top of Docker Sandboxes instead of the local Docker image. The `sandbox` backend keeps the same workspace guardrails and profile label, but lets `sbx` manage the sandbox filesystem, Docker daemon, and runtime isolation.
+`bin/opencode-sandbox` also sources `opencode-local.sh`, but only environment-style settings apply there. Docker-specific `DOCKER_ARGS` customizations do not carry over because `sbx` owns the sandbox runtime and mount model. Host OpenCode config is readable inside the sandbox by design; keep secrets out of committed or shared config files.
 
-This is not trying to clone someone else's `.claude/` or policy layout. The goal here is the same security posture in a simpler shape: one launcher per backend, explicit runtime boundaries, and enough knobs to fit a real SSH-first workflow.
+`make build` also sources `opencode-local.sh` for proxy/CA and extra APK package overrides. That keeps one local override flow for both runtime and build behavior.
 
-Default sandbox sizing:
+Config content is resolved in this order:
 
-```bash
-OPENCODE_SANDBOX_MEMORY=8g
-OPENCODE_SANDBOX_CPUS=4
-```
+1. `OPENCODE_CONFIG_CONTENT` environment variable
+2. `OPENCODE_OVERRIDES_FILE` path (if set and file exists)
+3. No extra config content
 
-Override those per host or per run if needed.
+Both launchers accept CLI flags that mirror many of these environment variables. Run the launcher with `--help` for the full list. For example:
 
-Sandbox auto-naming: when `OPENCODE_SANDBOX_NAME` is not set, the launcher names the sandbox `opencode-<sanitized-basename>` where the workspace basename is lowercased and any characters other than alphanumerics, `.`, `+`, and `-` are replaced with `-`.
+- `opencode-container --profile`, `--image`, `--workspace`, `--sync-config`, `--help`
+- `opencode-sandbox --profile`, `--workspace`, `--name`, `--memory`, `--cpus`, `--template`, `--help`
 
-Host auth mirror: host OpenCode auth is copied into a sandbox-specific read-only auth mirror (`$OPENCODE_SANDBOX_STATE_DIR/auth/auth.json`). On each launch a bootstrap script ensures the sandbox's `~/.local/share/opencode/auth.json` points to that mirror via a symlink. The mirror is refreshed from the host every launch; the symlink only recreates itself when needed.
-
-Default network allowlist: the committed `config/sbx-network-allow.txt` only includes Ollama Cloud domains. If you use another model or provider API, add its domains narrowly (for example `api.example.com:443`) and run `make setup-sandbox-policy` before launching the sandbox.
-
-Recommended host PATH on Debian-style systems:
-
-```bash
-export PATH="$HOME/.docker/sbx/bin:$HOME/.docker/sbx/libexec:/usr/sbin:/sbin:$PATH"
-```
-
-Quick checks:
-
-```bash
-make doctor-sandbox
-make setup-sandbox-policy
-bin/opencode-sandbox -- --continue
-```
-
-The sandbox backend uses Docker Sandboxes' network policy. Project-managed allowlist entries live in `config/sbx-network-allow.txt`; apply missing entries with `make setup-sandbox-policy`. Add MCP or provider domains there narrowly, for example `api.example.com:443`, instead of allowing all outbound traffic.
-
-`make update` rebuilds only the local Docker image used by the container backend. Docker Sandboxes uses its own agent templates, and existing named sandboxes keep their filesystem layer until you remove or recreate them.
-
-If `sbx` fails to start, check `sbx daemon status`, confirm `/dev/kvm` access, and verify both `mkfs.ext4` and `mkfs.erofs` resolve in your PATH.
-
-See `docs/local-overrides.md` for local override layering and examples.
-
-## macOS Host Notes
-
-- The launcher no longer requires GNU `realpath`; it falls back to portable shell path resolution that works on current macOS hosts.
-- Docker Desktop on macOS still runs containers inside a Linux VM. Bind-mounted workspace writes land on the host as usual, but host network/device visibility differs from native Linux.
-- Keep expectations realistic: this repo preserves one main recommended workflow with an optional lower-integration mode, not a perfect host-isolation boundary across every Docker Desktop backend detail.
-
-## Makefile Targets
-
-- `make build`: Build the Docker image
-- `make update`: Pull the base image and rebuild without Docker cache
-- `make setup`: Create necessary persistent directories
-- `make doctor`: Verify prerequisites and setup
-- `make doctor-sandbox`: Verify Docker Sandboxes prerequisites and host runtime access
-- `make setup-sandbox-policy`: Apply project Docker Sandboxes network allowlist entries
-- `make run`: Run the container interactively (native profile)
-- `make run-native`: Run the container interactively (native profile)
-- `make run-secure`: Run the container with the secure profile
-- `make run-sandbox`: Run the `sandbox` backend
-- `make clean-sandbox-smoke`: Remove a sandbox named `opencode-containment-smoke` (a convention used for manual sandbox smoke testing; no Makefile target auto-creates it)
-- `make sync-config`: Re-seed OpenCode cache/state from host into container persistent state without launching a container
-- `make shell-install`: Install both `opencode-container` and `opencode-sandbox` launchers to `~/.local/bin`
-- `make clean`: Remove generated files and persistent state
-
-## Customization
-
-To add personal packages without committing Dockerfile changes, set `OPENCODE_BUILD_EXTRA_APK_PACKAGES` in `opencode-local.sh` and rebuild with `make build`. For shared base-image changes, edit the `Dockerfile`. To adjust mounts or security settings, update `bin/opencode-container`.
-
-## Version Strategy
+### Build and Version Strategy
 
 The committed defaults favor freshness over bit-for-bit reproducibility:
 
@@ -373,21 +271,7 @@ export MARKSMAN_SHA256_AARCH64="<linux-musl-arm64-sha256>"
 
 Leave checksum variables empty only when you intentionally want floating latest downloads.
 
-## Prerequisites
-
-- Docker
-- bash
-- `make`
-
-The `sandbox` backend additionally requires `sbx` (Docker Sandboxes), KVM access, and `mkfs.ext4`/`mkfs.erofs` in your PATH.
-
-## Dependencies and Guidance
-
-- Core dependencies: Docker, bash, and `make` (used by setup/build helpers).
-- Optional host tools: tmux (host-side, not in the container), neovim, VS Code, or any editor you prefer.
-- Start simple: run `make build`, `make setup`, then `make run`.
-- Harden further as needed: use `make run-secure`, trim mounts, and keep host configs read-only.
-- Prefer fork-level customization over adding heavy framework logic here.
+To add personal packages without committing Dockerfile changes, set `OPENCODE_BUILD_EXTRA_APK_PACKAGES` in `opencode-local.sh` and rebuild with `make build`. For shared base-image changes, edit the `Dockerfile`. To adjust mounts or security settings, update `bin/opencode-container`.
 
 ## What's in the Container
 
@@ -400,6 +284,59 @@ The image is built on the OpenCode base image (`ghcr.io/anomalyco/opencode:lates
 - Build tools: make, build-base, pkgconf, openssl-dev
 
 tmux is not installed in the container. It runs on the host and you attach to the container from inside your tmux session.
+
+## Repository Layout
+
+```
+bin/            launchers (opencode-container, opencode-sandbox)
+scripts/        build helper, entrypoint, nvim wrapper, sandbox policy setup
+config/         sandbox network allowlist
+demo/           prompt injection demo
+.github/        CI workflow
+Dockerfile      image definition
+Makefile        build/run/test helper targets
+install.sh      one-shot setup
+opencode-local.example.sh  tracked example for gitignored local overrides
+SECURITY_REPORT.md         security threat model and mitigations
+```
+
+## Makefile Targets
+
+- `make build`: Build the Docker image
+- `make update`: Pull the base image and rebuild without Docker cache
+- `make setup`: Create necessary persistent directories
+- `make doctor`: Verify prerequisites and setup
+- `make doctor-sandbox`: Verify Docker Sandboxes prerequisites and host runtime access
+- `make setup-sandbox-policy`: Apply project Docker Sandboxes network allowlist entries
+- `make run`: Run the container interactively (native profile)
+- `make run-native`: Run the container interactively (native profile)
+- `make run-secure`: Run the container with the secure profile
+- `make run-sandbox`: Run the `sandbox` backend
+- `make sync-config`: Re-seed OpenCode cache/state from host into container persistent state without launching a container
+- `make clean-sandbox-smoke`: Remove a sandbox named `opencode-containment-smoke` (a convention used for manual sandbox smoke testing; no Makefile target auto-creates it)
+- `make shell-install`: Install both `opencode-container` and `opencode-sandbox` launchers to `~/.local/bin`
+- `make clean`: Remove generated files and persistent state
+
+## Prerequisites
+
+- Docker, bash, `make`
+- Optional host tools: tmux (host-side, not in the container), neovim, VS Code, or any editor you prefer
+- The `sandbox` backend additionally requires `sbx` (Docker Sandboxes), KVM access, and `mkfs.ext4`/`mkfs.erofs` in your PATH
+
+## Troubleshooting
+
+- **Image is stale or tools are outdated**: Run `make update` to pull the latest base image and rebuild without cache.
+- **Auth or plugins not showing up**: Run `make sync-config` to re-seed host OpenCode cache/state into container persistent state.
+- **Docker/image/auth setup issues**: Run `make doctor` to check prerequisites, image, SSH agent, and OpenCode host state.
+- **Sandbox won't start**: Run `make doctor-sandbox` to check `sbx`, daemon status, KVM access, and filesystem tools. Confirm `/dev/kvm` is accessible and both `mkfs.ext4` and `mkfs.erofs` resolve in your PATH.
+- **Sandbox network blocked**: Add your provider's domain to `config/sbx-network-allow.txt` and run `make setup-sandbox-policy`.
+- **Podman rootless mount issues**: The launcher detects Podman and applies `keep-id` and `:Z` relabeling automatically. If mounts still fail, check SELinux labels.
+
+## macOS Host Notes
+
+- The launcher does not require GNU `realpath`; it falls back to portable shell path resolution that works on current macOS hosts.
+- Docker Desktop on macOS still runs containers inside a Linux VM. Bind-mounted workspace writes land on the host as usual, but host network/device visibility differs from native Linux.
+- Keep expectations realistic: this repo preserves one main recommended workflow with an optional lower-integration mode, not a perfect host-isolation boundary across every Docker Desktop backend detail.
 
 ## Continuous Integration
 

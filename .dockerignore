@@ -28,7 +28,6 @@ Thumbs.db
 .idea/
 
 # The Dockerfile only needs scripts copied into the image.
-docs/
 demo/
 config/
 LICENSE
