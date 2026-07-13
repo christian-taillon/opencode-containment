@@ -35,7 +35,7 @@ run-native: ## Run with native profile
 run-sandbox: ## Run the sandbox backend with Docker Sandboxes
 	@bash bin/opencode-sandbox --profile native
 
-sync-config: ## Re-seed OpenCode cache/state from host into container persistent state
+sync-config: ## Force-refresh OpenCode cache/state from host into container persistent state
 	@bash bin/opencode-container --sync-config
 
 setup-sandbox-policy: ## Apply project Docker Sandboxes network allowlist
@@ -47,11 +47,15 @@ doctor: ## Check prerequisites
 	@docker image inspect $(IMAGE_NAME) >/dev/null 2>&1 && echo "✅ Image $(IMAGE_NAME) is built" || echo "❌ Image $(IMAGE_NAME) is not built"
 	@[ -n "$$SSH_AUTH_SOCK" ] && [ -S "$$SSH_AUTH_SOCK" ] && echo "✅ SSH agent is running" || echo "⚠️ SSH agent is not running or socket not found"
 	@[ -d "$(OPENCODE_CONTAINER_HOME)" ] && echo "✅ Persistent directory exists" || echo "❌ Persistent directory does not exist"
-	@echo "--- OpenCode host state categories ---"
-	@[ -d "$$HOME/.config/opencode" ] && echo "✅ config  (XDG_CONFIG_HOME):  $$HOME/.config/opencode" || echo "⚠️ config  (XDG_CONFIG_HOME) not found at $$HOME/.config/opencode"
-	@[ -f "$$HOME/.local/share/opencode/auth.json" ] && echo "✅ data    (XDG_DATA_HOME):    $$HOME/.local/share/opencode/auth.json" || echo "⚠️ data    (XDG_DATA_HOME) auth not detected"
-	@[ -d "$$HOME/.cache/opencode/packages" ] && echo "✅ cache   (XDG_CACHE_HOME):   $$HOME/.cache/opencode/packages" || echo "⚠️ cache   (XDG_CACHE_HOME) plugin packages not found"
-	@[ -f "$$HOME/.local/state/opencode/plugin-meta.json" ] && echo "✅ state   (XDG_STATE_HOME):   $$HOME/.local/state/opencode/plugin-meta.json" || echo "⚠️ state   (XDG_STATE_HOME) plugin-meta not found"
+	@config="$${OPENCODE_CONFIG_DIR:-$${XDG_CONFIG_HOME:-$$HOME/.config}/opencode}"; \
+	data="$${OPENCODE_HOST_STATE_DIR:-$${XDG_DATA_HOME:-$$HOME/.local/share}/opencode}"; \
+	cache="$${OPENCODE_HOST_CACHE_DIR:-$${XDG_CACHE_HOME:-$$HOME/.cache}/opencode}"; \
+	state="$${OPENCODE_HOST_RUNTIME_STATE_DIR:-$${XDG_STATE_HOME:-$$HOME/.local/state}/opencode}"; \
+	echo "--- OpenCode host XDG categories ---"; \
+	if [ -d "$$config" ]; then echo "✅ config  (XDG_CONFIG_HOME):  $$config"; else echo "⚠️ config  (XDG_CONFIG_HOME) not found at $$config"; fi; \
+	if [ -f "$$data/auth.json" ] || [ -f "$$data/opencode.db" ]; then echo "✅ data    (XDG_DATA_HOME):    $$data"; else echo "⚠️ data    (XDG_DATA_HOME) auth/database not detected at $$data"; fi; \
+	if [ -d "$$cache/packages" ] || [ -f "$$cache/models.json" ] || [ -d "$$cache/opencode-quota" ]; then echo "✅ cache   (XDG_CACHE_HOME):   $$cache"; else echo "⚠️ cache   (XDG_CACHE_HOME) OpenCode cache not detected at $$cache"; fi; \
+	if [ -f "$$state/model.json" ] || [ -f "$$state/kv.json" ] || [ -f "$$state/plugin-meta.json" ]; then echo "✅ state   (XDG_STATE_HOME):   $$state"; else echo "⚠️ state   (XDG_STATE_HOME) OpenCode state not detected at $$state"; fi
 
 doctor-sandbox: ## Check Docker Sandboxes (sbx) prerequisites
 	@echo "Checking sandbox prerequisites..."

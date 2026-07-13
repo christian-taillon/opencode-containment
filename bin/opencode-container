@@ -161,10 +161,10 @@ while [[ $# -gt 0 ]]; do
 done
 
 # Validate workspace to prevent host OS breakage.
-# --sync-config only re-seeds state and never launches a container, so it does
-# not need a valid workspace; skip the workspace checks in that mode.
-REAL_HOME="$(resolve_path "$HOME")"
+# --sync-config only re-seeds cache/state and never launches a container, so it
+# does not need a valid workspace or Docker.
 if [[ "${SYNC_CONFIG_ONLY:-0}" != "1" ]]; then
+    REAL_HOME="$(resolve_path "$HOME")"
     if [[ ! -e "$WORKSPACE" ]]; then
         echo "Error: Workspace path does not exist: $WORKSPACE" >&2
         exit 1
@@ -191,38 +191,151 @@ if [[ "${SYNC_CONFIG_ONLY:-0}" != "1" ]]; then
     fi
 fi
 
-# Ensure persistent directories exist
+# Copy a file from host to container state.
+copy_file() {
+    local src="$1" dst="$2"
+    [[ -f "$src" ]] || return 0
+    cp -f -- "$src" "$dst"
+}
+
+# Copy a file from host to container state only when the destination is
+# missing (first-init semantics).
+copy_first_init() {
+    local src="$1" dst="$2"
+    [[ -f "$src" ]] || return 0
+    [[ -e "$dst" || -L "$dst" ]] || cp -f -- "$src" "$dst"
+}
+
+# Copy cache/state files from host to container state. These are first-init by
+# default, with OPENCODE_SYNC_CONFIG_FORCE=1 providing an explicit refresh.
+copy_config_file() {
+    local src="$1" dst="$2"
+    [[ -f "$src" ]] || return 0
+    if [[ "$OPENCODE_SYNC_CONFIG_FORCE" != "1" && ( -e "$dst" || -L "$dst" ) ]]; then
+        return 0
+    fi
+    cp -f -- "$src" "$dst"
+}
+
+directory_is_empty() (
+    local dir="$1"
+    local entries=()
+    shopt -s dotglob nullglob
+    entries=("$dir"/*)
+    ((${#entries[@]} == 0))
+)
+
+# Copy a directory tree from host to container state, but only when the
+# destination is empty (first-init semantics). Force refreshes replace the
+# destination contents rather than nesting another source directory inside it.
+copy_tree_first_init() {
+    local src="$1" dst="$2"
+    [[ -d "$src" ]] || return 0
+    if [[ "$OPENCODE_SYNC_CONFIG_FORCE" == "1" ]]; then
+        rm -rf -- "$dst"
+        mkdir -p "$dst"
+        cp -a -- "$src/." "$dst/"
+        return 0
+    fi
+
+    mkdir -p "$dst"
+    # Only seed when the destination is empty so container-created state wins.
+    if directory_is_empty "$dst"; then
+        cp -a -- "$src/." "$dst/"
+    fi
+}
+
+# Copy plugin metadata on first-init, rewriting the four host OpenCode XDG
+# paths so plugin fingerprints point at the isolated container state.
+copy_plugin_meta() {
+    local src="$1" dst="$2" tmp line
+    [[ -f "$src" ]] || return 0
+    if [[ "$OPENCODE_SYNC_CONFIG_FORCE" != "1" && ( -e "$dst" || -L "$dst" ) ]]; then
+        return 0
+    fi
+
+    tmp="$dst.tmp"
+    rm -f -- "$tmp"
+    if command -v jq >/dev/null 2>&1; then
+        if ! jq \
+            --arg host_config "$HOST_CONFIG_DIR" \
+            --arg host_data "$HOST_DATA_DIR" \
+            --arg host_cache "$HOST_CACHE_DIR" \
+            --arg host_state "$HOST_STATE_DIR" \
+            --arg container_config "$CONTAINER_CONFIG_PATH" \
+            --arg container_data "$CONTAINER_DATA_PATH" \
+            --arg container_cache "$CONTAINER_CACHE_PATH" \
+            --arg container_state "$CONTAINER_STATE_PATH" \
+            '
+            def rewrite_paths:
+              if type == "string" then
+                split($host_config) | join($container_config) |
+                split($host_data) | join($container_data) |
+                split($host_cache) | join($container_cache) |
+                split($host_state) | join($container_state)
+              elif type == "array" then map(rewrite_paths)
+              elif type == "object" then with_entries(.value |= rewrite_paths)
+              else . end;
+            rewrite_paths
+            ' "$src" > "$tmp"; then
+            rm -f -- "$tmp"
+            return 1
+        fi
+    else
+        # OpenCode writes ordinary JSON paths. Keep this fallback dependency-free
+        # while still replacing literal paths in plugin specs, targets, and themes.
+        while IFS= read -r line || [[ -n "$line" ]]; do
+            line="${line//"$HOST_CONFIG_DIR"/"$CONTAINER_CONFIG_PATH"}"
+            line="${line//"$HOST_DATA_DIR"/"$CONTAINER_DATA_PATH"}"
+            line="${line//"$HOST_CACHE_DIR"/"$CONTAINER_CACHE_PATH"}"
+            line="${line//"$HOST_STATE_DIR"/"$CONTAINER_STATE_PATH"}"
+            printf '%s\n' "$line" >> "$tmp"
+        done < "$src"
+    fi
+    mv -f -- "$tmp" "$dst"
+}
+
+# Ensure persistent directories exist before seeding the isolated copies.
 mkdir -p "$OPENCODE_CONTAINER_HOME"/{cache,local}
 mkdir -p "$CONTAINER_DATA_DIR" "$CONTAINER_CACHE_DIR" "$CONTAINER_STATE_DIR"
 
-# Copy a file from host to container state, but only when the destination is
-# missing (first-init semantics). Forces overwrite when $2 = "force".
-copy_first_init() {
-    local src="$1" dst="$2" mode="${3:-keep}"
-    [[ -f "$src" ]] || return 0
-    if [[ "$mode" == "force" || "$OPENCODE_SYNC_CONFIG_FORCE" == "1" ]]; then
-        cp -f "$src" "$dst"
-        return 0
+# XDG_DATA_HOME: refresh auth-adjacent files every normal launch so host logins
+# stay visible. Seed the database and its sidecars only while the container
+# database is absent; cache/state refreshes must never replace it.
+if [[ "$SYNC_CONFIG_ONLY" != "1" && "$OPENCODE_SYNC_HOST_AUTH" != "0" && -d "$HOST_DATA_DIR" ]]; then
+    copy_file "$HOST_DATA_DIR/auth.json"     "$CONTAINER_DATA_DIR/auth.json"
+    copy_file "$HOST_DATA_DIR/account.json"  "$CONTAINER_DATA_DIR/account.json"
+    copy_file "$HOST_DATA_DIR/mcp-auth.json" "$CONTAINER_DATA_DIR/mcp-auth.json"
+    if [[ ! -e "$CONTAINER_DATA_DIR/opencode.db" && ! -L "$CONTAINER_DATA_DIR/opencode.db" ]]; then
+        copy_first_init "$HOST_DATA_DIR/opencode.db"     "$CONTAINER_DATA_DIR/opencode.db"
+        copy_first_init "$HOST_DATA_DIR/opencode.db-shm" "$CONTAINER_DATA_DIR/opencode.db-shm"
+        copy_first_init "$HOST_DATA_DIR/opencode.db-wal" "$CONTAINER_DATA_DIR/opencode.db-wal"
     fi
-    [[ -f "$dst" ]] || cp -f "$src" "$dst"
-}
+fi
 
-# Copy a directory tree from host to container state, but only when the
-# destination is empty (first-init semantics). Forces overwrite when $2 = "force".
-copy_tree_first_init() {
-    local src="$1" dst="$2" mode="${3:-keep}"
-    [[ -d "$src" ]] || return 0
-    mkdir -p "$dst"
-    if [[ "$mode" == "force" || "$OPENCODE_SYNC_CONFIG_FORCE" == "1" ]]; then
-        rm -rf "$dst"
-        cp -a "$src" "$dst"
-        return 0
-    fi
-    # Only seed when the destination is empty so container-created state wins.
-    if [[ -z "$(ls -A "$dst" 2>/dev/null || true)" ]]; then
-        cp -a "$src" "$dst"
-    fi
-}
+# XDG_CACHE_HOME: seed plugin install tree, models.json, and the opencode-quota
+# pricing/provider caches. These can be large, so they are first-init only.
+if [[ "$OPENCODE_SYNC_CONFIG_CACHE" != "0" && -d "$HOST_CACHE_DIR" ]]; then
+    copy_tree_first_init "$HOST_CACHE_DIR/packages"             "$CONTAINER_CACHE_DIR/packages"
+    copy_config_file    "$HOST_CACHE_DIR/models.json"          "$CONTAINER_CACHE_DIR/models.json"
+    copy_tree_first_init "$HOST_CACHE_DIR/opencode-quota"       "$CONTAINER_CACHE_DIR/opencode-quota"
+    copy_tree_first_init "$HOST_CACHE_DIR/quota-provider-state" "$CONTAINER_CACHE_DIR/quota-provider-state"
+fi
+
+# XDG_STATE_HOME: seed only model/config metadata, never host UI history or
+# locks. plugin-meta.json needs its host XDG paths rewritten for the container.
+if [[ "$OPENCODE_SYNC_CONFIG_STATE" != "0" && -d "$HOST_STATE_DIR" ]]; then
+    copy_config_file "$HOST_STATE_DIR/model.json" "$CONTAINER_STATE_DIR/model.json"
+    copy_config_file "$HOST_STATE_DIR/kv.json"    "$CONTAINER_STATE_DIR/kv.json"
+    copy_plugin_meta "$HOST_STATE_DIR/plugin-meta.json" "$CONTAINER_STATE_DIR/plugin-meta.json"
+fi
+
+# --sync-config only force-refreshes cache/state and deliberately exits before
+# workspace validation or Docker detection.
+if [[ "$SYNC_CONFIG_ONLY" == "1" ]]; then
+    echo "Config sync complete."
+    exit 0
+fi
 
 # Base docker run arguments
 DOCKER_ARGS+=(
@@ -325,74 +438,6 @@ fi
 # GitHub CLI config
 if [[ -d "$HOME/.config/gh" ]]; then
     DOCKER_ARGS+=(--volume "$HOME/.config/gh:/home/opencode/.config/gh:ro")
-fi
-
-# --- OpenCode state seeding across all four XDG base categories ---
-#
-# OpenCode spreads state across four host trees. The container owns its own
-# copies under OPENCODE_CONTAINER_HOME so host and container sessions/caches do
-# not clobber each other. Seeding is first-init by default (container-created
-# state wins once it exists); OPENCODE_SYNC_CONFIG_FORCE=1 re-seeds from host.
-#
-#   XDG_CONFIG_HOME  -> mounted read-only above (shared, never copied)
-#   XDG_DATA_HOME    -> auth-adjacent files refreshed each launch; db first-init
-#   XDG_CACHE_HOME   -> plugin packages + models.json + quota caches, first-init
-#   XDG_STATE_HOME   -> model/kv/plugin-meta, first-init (host UI state skipped)
-
-# XDG_DATA_HOME: refresh auth-adjacent files every launch so host logins stay
-# visible; seed the session database only on first init so container-created
-# sessions remain resumable with `opencode-container -s <session-id>`.
-if [[ "$OPENCODE_SYNC_HOST_AUTH" != "0" && -d "$HOST_DATA_DIR" ]]; then
-    copy_first_init "$HOST_DATA_DIR/auth.json"     "$CONTAINER_DATA_DIR/auth.json"     force
-    copy_first_init "$HOST_DATA_DIR/account.json" "$CONTAINER_DATA_DIR/account.json" force
-    copy_first_init "$HOST_DATA_DIR/mcp-auth.json" "$CONTAINER_DATA_DIR/mcp-auth.json" force
-    copy_first_init "$HOST_DATA_DIR/opencode.db"      "$CONTAINER_DATA_DIR/opencode.db"
-    copy_first_init "$HOST_DATA_DIR/opencode.db-shm"  "$CONTAINER_DATA_DIR/opencode.db-shm"
-    copy_first_init "$HOST_DATA_DIR/opencode.db-wal"  "$CONTAINER_DATA_DIR/opencode.db-wal"
-fi
-
-# XDG_CACHE_HOME: seed plugin install tree, models.json, and the opencode-quota
-# pricing/provider caches so plugins like @slkiser/opencode-quota work without a
-# cold re-download. First-init only (the cache is large and self-healing).
-if [[ "$OPENCODE_SYNC_CONFIG_CACHE" != "0" && -d "$HOST_CACHE_DIR" ]]; then
-    copy_tree_first_init "$HOST_CACHE_DIR/packages"            "$CONTAINER_CACHE_DIR/packages"
-    copy_first_init      "$HOST_CACHE_DIR/models.json"         "$CONTAINER_CACHE_DIR/models.json"
-    copy_tree_first_init "$HOST_CACHE_DIR/opencode-quota"      "$CONTAINER_CACHE_DIR/opencode-quota"
-    copy_tree_first_init "$HOST_CACHE_DIR/quota-provider-state" "$CONTAINER_CACHE_DIR/quota-provider-state"
-fi
-
-# XDG_STATE_HOME: seed model selection, key/value prefs, and plugin metadata so
-# the container starts with the host's chosen model and plugin fingerprints.
-# plugin-meta.json records absolute host paths that must be rewritten to the
-# container home, otherwise plugins fail fingerprint checks and won't load.
-# Host-only UI state (tui/, prompt-history, frecency, locks) is intentionally
-# skipped so the container gets a clean UI history.
-if [[ "$OPENCODE_SYNC_CONFIG_STATE" != "0" && -d "$HOST_STATE_DIR" ]]; then
-    copy_first_init "$HOST_STATE_DIR/model.json" "$CONTAINER_STATE_DIR/model.json"
-    copy_first_init "$HOST_STATE_DIR/kv.json"     "$CONTAINER_STATE_DIR/kv.json"
-
-    if [[ -f "$HOST_STATE_DIR/plugin-meta.json" ]]; then
-        # Rewrite absolute host paths to the container home so plugin
-        # fingerprints resolve. Host: /home/<user>; container: /home/opencode.
-        if command -v jq >/dev/null 2>&1; then
-            jq -r --arg h "$REAL_HOME" --arg c "$CONTAINER_HOME" \
-                  'to_entries | map(.value.target |= sub("^" + $h; $c))
-                   | from_entries' \
-                "$HOST_STATE_DIR/plugin-meta.json" > "$CONTAINER_STATE_DIR/plugin-meta.json.tmp"
-            mv "$CONTAINER_STATE_DIR/plugin-meta.json.tmp" "$CONTAINER_STATE_DIR/plugin-meta.json"
-        else
-            # No jq: copy as-is. Plugins may re-fingerprint on first load.
-            copy_first_init "$HOST_STATE_DIR/plugin-meta.json" "$CONTAINER_STATE_DIR/plugin-meta.json" force
-        fi
-    fi
-fi
-
-# --sync-config exits after re-seeding host config into the container's
-# persistent state. Useful for refreshing plugin caches and quota state without
-# launching OpenCode (e.g. after installing a new host plugin).
-if [[ "${SYNC_CONFIG_ONLY:-0}" == "1" ]]; then
-    echo "Config sync complete."
-    exit 0
 fi
 
 # Load config overrides with precedence:

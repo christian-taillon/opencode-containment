@@ -39,10 +39,11 @@ That is the normal path. The workspace is your current project directory, mounte
 Useful follow-ups:
 
 ```bash
-make doctor      # check Docker/image/auth setup
+make doctor      # check Docker/image/OpenCode XDG setup
 make update      # pull latest upstream pieces and rebuild
 make run-secure  # lower-integration container profile
 make run-sandbox # sandbox backend (stronger isolation)
+make sync-config # force-refresh isolated OpenCode cache/state
 ```
 
 You can also pass OpenCode subcommands directly through the launcher:
@@ -58,7 +59,8 @@ Use `--` only when you want to run a raw command in the container:
 opencode-container -- bash
 ```
 
-Re-seed host config into container state without launching a container:
+Force-refresh host OpenCode cache and state into isolated container storage
+without launching a container:
 
 ```bash
 opencode-container --sync-config
@@ -66,7 +68,7 @@ opencode-container --sync-config
 make sync-config
 ```
 
-Host OpenCode auth from `~/.local/share/opencode` is mirrored into the container's persistent state automatically, so providers you have already logged into on the host should appear inside `make run` without extra setup. The host database is copied only during first-time container state initialization so container-created sessions remain resumable with `opencode-container -s <session-id>`.
+Host OpenCode data is resolved from `OPENCODE_HOST_STATE_DIR` or `XDG_DATA_HOME` and auth is mirrored into isolated container state automatically, so providers you have already logged into on the host should appear inside `make run` without extra setup. The host database is copied only during first-time container state initialization so container-created sessions remain resumable with `opencode-container -s <session-id>`.
 
 If you are behind a proxy or need an internal CA bundle, set the standard proxy variables in your shell or `opencode-local.sh` before `make build` / `make run`. They are only passed through when explicitly set.
 
@@ -175,7 +177,7 @@ DOCKER_ARGS+=(--network none)
 
 This blocks all container outbound traffic, including provider APIs, package managers, and any exfiltration path. It is useful for demos and audit scenarios, but it will also prevent the agent from doing useful online work.
 
-By default, the launcher mirrors host OpenCode auth from `~/.local/share/opencode`. Set `OPENCODE_SYNC_HOST_AUTH=0` in `opencode-local.sh` if you want the container to keep a separate login identity, or set `OPENCODE_HOST_STATE_DIR` to mirror from a different location.
+By default, the launcher mirrors host OpenCode auth from `OPENCODE_HOST_STATE_DIR` or `${XDG_DATA_HOME:-$HOME/.local/share}/opencode`. Set `OPENCODE_SYNC_HOST_AUTH=0` in `opencode-local.sh` if you want the container to keep a separate login identity.
 
 If you want a sanitized zsh setup, generate it locally in your own script and source or mount it from `opencode-local.sh`. The repo no longer manages that workflow for you.
 
@@ -195,31 +197,42 @@ You can customize the environment with environment variables or a local override
 - `OPENCODE_BUILD_NO_CACHE`: Set to `1` to force `--no-cache` on `docker build`.
 - `IMAGE_NAME`: Override the image tag for build/run (default: `opencode-containment:latest`).
 - Build pin overrides: `RUST_TOOLCHAIN`, `UV_VERSION`, `UV_INSTALLER_SHA256`, `MARKSMAN_VERSION`, `MARKSMAN_SHA256_X86_64`, and `MARKSMAN_SHA256_AARCH64` can be set in `opencode-local.sh` before `make build`.
-- `OPENCODE_SYNC_HOST_AUTH`: Set to `0` to skip data-dir auth/account/db seeding (default: `1`).
+- `OPENCODE_SYNC_HOST_AUTH`: Set to `0` to skip data-dir auth/account/database seeding (default: `1`).
 - `OPENCODE_SYNC_CONFIG_CACHE`: Set to `0` to skip cache-dir seeding (default: `1`).
-- `OPENCODE_SYNC_CONFIG_STATE`: Set to `0` to skip state-dir seeding (default: `1`).
-- `OPENCODE_SYNC_CONFIG_FORCE`: Set to `1` to force re-seeding cache/state into container state, overwriting existing container copies.
-- `OPENCODE_CONFIG_DIR`: Host OpenCode config directory mounted read-only into sandbox (default: `$HOME/.config/opencode`).
-- `OPENCODE_HOST_STATE_DIR`: Host OpenCode data directory used as the auth source (default: `$HOME/.local/share/opencode`).
-- `OPENCODE_HOST_CACHE_DIR`: Override the host cache directory used as a seed source (default: `$HOME/.cache/opencode`).
-- `OPENCODE_HOST_RUNTIME_STATE_DIR`: Override the host runtime state directory used as a seed source (default: `$HOME/.local/state/opencode`).
-- `OPENCODE_SANDBOX_STATE_DIR`: Host directory for sandbox support files such as the auth mirror (default: `$HOME/.local/share/opencode-sandbox`).
+- `OPENCODE_SYNC_CONFIG_STATE`: Set to `0` to skip runtime-state seeding (default: `1`).
+- `OPENCODE_SYNC_CONFIG_FORCE`: Set to `1` to refresh cache/state copies. It never overwrites `opencode.db`.
+- `OPENCODE_CONFIG_DIR`: Host config directory mounted read-only (default: `${XDG_CONFIG_HOME:-$HOME/.config}/opencode`).
+- `OPENCODE_HOST_STATE_DIR`: Backward-compatible name for the host **data** directory (default: `${XDG_DATA_HOME:-$HOME/.local/share}/opencode`).
+- `OPENCODE_HOST_CACHE_DIR`: Host cache seed source (default: `${XDG_CACHE_HOME:-$HOME/.cache}/opencode`).
+- `OPENCODE_HOST_RUNTIME_STATE_DIR`: Host runtime-state seed source (default: `${XDG_STATE_HOME:-$HOME/.local/state}/opencode`).
+- `OPENCODE_SANDBOX_STATE_DIR`: Host directory for sandbox support files such as the auth mirror (default: `${XDG_DATA_HOME:-$HOME/.local/share}/opencode-sandbox`).
 - `OPENCODE_SBX_BIN`: Override the `sbx` binary path for `bin/opencode-sandbox`.
 - `OPENCODE_SANDBOX_NAME`: Reuse or create a named sandbox.
 - `OPENCODE_SANDBOX_MEMORY`: Pass a memory limit to `sbx run` (default: `8g`).
 - `OPENCODE_SANDBOX_CPUS`: Pass a CPU count to `sbx run` (default: `4`).
 - `OPENCODE_SANDBOX_TEMPLATE`: Override the sandbox template image.
 
-### XDG State Seeding
+### XDG OpenCode State
 
-The launcher seeds state across all four XDG base categories:
+The container launcher resolves all four XDG base categories. Host OpenCode
+cache and state are copied into `OPENCODE_CONTAINER_HOME`; no writable host
+OpenCode data, cache, or runtime-state directory is mounted.
 
-- **Config (`XDG_CONFIG_HOME`)**: mounted read-only and shared with the host
-- **Data (`XDG_DATA_HOME`)**: `auth.json`, `account.json`, `mcp-auth.json` refreshed each launch; `opencode.db` seeded first-init only
-- **Cache (`XDG_CACHE_HOME`)**: plugins, `models.json`, and quota caches seeded first-init only
-- **State (`XDG_STATE_HOME`)**: `model.json`, `kv.json`, and `plugin-meta.json` seeded first-init only, with host paths rewritten to container home paths
+- **Config (`XDG_CONFIG_HOME`)**: mounted read-only and shared with the host.
+- **Data (`XDG_DATA_HOME`)**: `auth.json`, `account.json`, and `mcp-auth.json` refresh each launch; `opencode.db` and its WAL/SHM seed only when the container database is absent.
+- **Cache (`XDG_CACHE_HOME`)**: `packages/`, `models.json`, `opencode-quota/`, and `quota-provider-state/` seed first-init only. `packages/` can be large, so it is copied only on first init or an explicit refresh.
+- **State (`XDG_STATE_HOME`)**: `model.json`, `kv.json`, and `plugin-meta.json` seed first-init only. Metadata paths for config, data, cache, and state are rewritten for `/home/opencode`; locks, prompt history, frecency, and TUI state are not copied.
 
-For the sandbox backend, host OpenCode config is mounted read-only and host auth is copied into a sandbox-specific read-only auth mirror. Sandbox sessions and `opencode.db` remain sandbox-local, so native, container, and sandbox usage do not overwrite each other's session databases.
+`make sync-config` (or `opencode-container --sync-config`) force-refreshes only
+the selected cache/state copies, then exits before workspace and Docker checks.
+It never overwrites the isolated `opencode.db`. Set
+`OPENCODE_SYNC_CONFIG_CACHE=0` or `OPENCODE_SYNC_CONFIG_STATE=0` to opt out.
+
+For the sandbox backend, config and data defaults honor `XDG_CONFIG_HOME` and
+`XDG_DATA_HOME`; host config is mounted read-only and host auth is copied into a
+sandbox-specific read-only auth mirror. Host cache and runtime state are not
+shared. Sandbox sessions and `opencode.db` remain sandbox-local, so native,
+container, and sandbox usage do not overwrite each other's session databases.
 
 ### Local Override Hook
 
@@ -230,6 +243,8 @@ cp opencode-local.example.sh opencode-local.sh
 ```
 
 `bin/opencode-container` sources `opencode-local.sh` before `docker run`, so you can set default profiles, pass JSON config, add mounts or env vars, and sync local auth into the persistent container state without committing any of it.
+
+See [docs/local-overrides.md](docs/local-overrides.md) for XDG source and sync overrides.
 
 `bin/opencode-sandbox` also sources `opencode-local.sh`, but only environment-style settings apply there. Docker-specific `DOCKER_ARGS` customizations do not carry over because `sbx` owns the sandbox runtime and mount model. Host OpenCode config is readable inside the sandbox by design; keep secrets out of committed or shared config files.
 
@@ -312,7 +327,7 @@ SECURITY_REPORT.md         security threat model and mitigations
 - `make run-native`: Run the container interactively (native profile)
 - `make run-secure`: Run the container with the secure profile
 - `make run-sandbox`: Run the `sandbox` backend
-- `make sync-config`: Re-seed OpenCode cache/state from host into container persistent state without launching a container
+- `make sync-config`: Force-refresh OpenCode cache/state from host into container persistent state without launching a container
 - `make clean-sandbox-smoke`: Remove a sandbox named `opencode-containment-smoke` (a convention used for manual sandbox smoke testing; no Makefile target auto-creates it)
 - `make shell-install`: Install both `opencode-container` and `opencode-sandbox` launchers to `~/.local/bin`
 - `make clean`: Remove generated files and persistent state
@@ -326,7 +341,7 @@ SECURITY_REPORT.md         security threat model and mitigations
 ## Troubleshooting
 
 - **Image is stale or tools are outdated**: Run `make update` to pull the latest base image and rebuild without cache.
-- **Auth or plugins not showing up**: Run `make sync-config` to re-seed host OpenCode cache/state into container persistent state.
+- **Plugins or model state not showing up**: Run `make sync-config` to force-refresh host OpenCode cache/state into container persistent state.
 - **Docker/image/auth setup issues**: Run `make doctor` to check prerequisites, image, SSH agent, and OpenCode host state.
 - **Sandbox won't start**: Run `make doctor-sandbox` to check `sbx`, daemon status, KVM access, and filesystem tools. Confirm `/dev/kvm` is accessible and both `mkfs.ext4` and `mkfs.erofs` resolve in your PATH.
 - **Sandbox network blocked**: Add your provider's domain to `config/sbx-network-allow.txt` and run `make setup-sandbox-policy`.
