@@ -425,6 +425,7 @@ container_id="$DOCKER_RUN_ID"
 
 assert_arg_pair --detach --name
 assert_arg_pair --name "$container_name"
+assert_arg_pair --tmpfs /home/opencode/.config:rw,nosuid,nodev,noexec,size=16m
 assert_arg_pair --publish "127.0.0.1:4701:4701"
 assert_arg_pair --volume "$credentials_file:/tmp/opencode-web-credentials:ro"
 assert_arg_pair --volume "$SCRIPT_DIR/scripts/web-server-entrypoint.sh:/tmp/opencode-web-entrypoint:ro"

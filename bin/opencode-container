@@ -1066,6 +1066,9 @@ DOCKER_ARGS+=(
     --security-opt no-new-privileges:true
     --read-only
     --tmpfs /tmp:rw,nosuid,nodev,exec,size=256m
+    # OpenCode may initialize XDG_CONFIG_HOME when the host has no config to
+    # mount. Keep that parent ephemeral while nested host config mounts stay RO.
+    --tmpfs /home/opencode/.config:rw,nosuid,nodev,noexec,size=16m
     --init
     --env "OPENCODE_PROFILE=$PROFILE"
     --env HOME=/home/opencode
