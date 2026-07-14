@@ -102,6 +102,11 @@ daemon administrators remain trusted.
 For this entrypoint-independent launch path, a custom `OPENCODE_IMAGE` must
 provide `/bin/sh` and the `opencode` executable.
 
+For running the web server as a **systemd service** (auto-start, restart,
+status) and for **attaching a TUI** to a running web server (including the
+`/workspace` path translation the container requires), see
+[docs/web-server.md](docs/web-server.md).
+
 Use `--` only when you want to run a raw command in the container:
 
 ```bash
