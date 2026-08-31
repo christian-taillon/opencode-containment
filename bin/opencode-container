@@ -99,11 +99,32 @@ if [[ -f "$LOCAL_HOOK" ]]; then
     source "$LOCAL_HOOK"
 fi
 
+# The v2 wrappers select this mode with a private positional marker. Resolve it
+# after the local hook so an environment variable or local default cannot cause
+# a stable launcher to execute the preview binary (or vice versa).
+LAUNCHER_MODE="stable"
+if [[ "${1:-}" == "--__opencode2" ]]; then
+    LAUNCHER_MODE="v2"
+    shift
+fi
+if [[ "$LAUNCHER_MODE" == "v2" ]]; then
+    LAUNCHER_COMMAND="opencode2-container"
+    OPENCODE_EXECUTABLE="opencode2"
+    WEB_NAME_PREFIX="opencode2-web-"
+    WEB_HEALTH_PATH="/api/health"
+    OPENCODE_CONTAINER_HOME="${OPENCODE2_CONTAINER_HOME:-${OPENCODE_CONTAINER_HOME:-$HOME/.local/share/opencode2-container}}"
+else
+    LAUNCHER_COMMAND="opencode-container"
+    OPENCODE_EXECUTABLE="opencode"
+    WEB_NAME_PREFIX="opencode-web-"
+    WEB_HEALTH_PATH="/global/health"
+    OPENCODE_CONTAINER_HOME="${OPENCODE_CONTAINER_HOME:-$HOME/.local/share/opencode-container}"
+fi
+
 # Default values (env-overridable)
 PROFILE="${OPENCODE_PROFILE:-secure}"
 IMAGE="${OPENCODE_IMAGE:-opencode-containment:latest}"
 WORKSPACE="${OPENCODE_WORKSPACE:-$PWD}"
-OPENCODE_CONTAINER_HOME="${OPENCODE_CONTAINER_HOME:-$HOME/.local/share/opencode-container}"
 OPENCODE_SYNC_HOST_AUTH="${OPENCODE_SYNC_HOST_AUTH:-1}"
 OPENCODE_SYNC_CONFIG_CACHE="${OPENCODE_SYNC_CONFIG_CACHE:-1}"
 OPENCODE_SYNC_CONFIG_STATE="${OPENCODE_SYNC_CONFIG_STATE:-1}"
@@ -137,8 +158,8 @@ WEB_LEGACY_LABEL_KEY="io.opencode-containment.web-launch-id"
 
 show_help() {
     cat <<EOF
-Usage: opencode-container [OPTIONS] [-- ARGS...]
-       opencode-container [COMMON OPTIONS] --web-server [start|stop|status] [--web-port PORT] [--network-accessible]
+Usage: $LAUNCHER_COMMAND [OPTIONS] [-- ARGS...]
+       $LAUNCHER_COMMAND [COMMON OPTIONS] --web-server [start|stop|status] [--web-port PORT] [--network-accessible]
 
 Options:
   --profile PROFILE   Profile to use: secure or native (default: OPENCODE_PROFILE or secure)
@@ -152,12 +173,16 @@ Options:
   --help              Show this help message
 
 Behavior:
-  Without '--', arguments are passed to 'opencode'.
-    Example: opencode-container auth ls
+  Without '--', arguments are passed to '$OPENCODE_EXECUTABLE'.
+     Example: $LAUNCHER_COMMAND auth ls
   With '--', arguments are executed as a raw container command.
-    Example: opencode-container -- bash
+    Example: $LAUNCHER_COMMAND -- bash
   --web-server starts the server by default; its commands are start, stop, and status.
   --web-server cannot be combined with OpenCode or raw command arguments.
+
+Variant:
+  This launcher uses '$OPENCODE_EXECUTABLE'. The opencode2 launcher is a beta
+  preview and uses 'serve' plus /api/health for web-server mode.
 
 Profiles:
   secure: Essential mounts only (opencode config, git config, workspace, persistent cache/state, SSH agent)
@@ -340,7 +365,7 @@ if [[ "${SYNC_CONFIG_ONLY:-0}" != "1" ]]; then
     if [[ "$WEB_SERVER" == "1" ]]; then
         workspace_hash="$(printf '%s' "$REAL_WORKSPACE" | cksum)"
         workspace_hash="${workspace_hash%% *}"
-        WEB_CONTAINER_NAME="opencode-web-$(sanitize_web_container_name "$(basename "$REAL_WORKSPACE")")-${workspace_hash}-${WEB_PORT}"
+        WEB_CONTAINER_NAME="${WEB_NAME_PREFIX}$(sanitize_web_container_name "$(basename "$REAL_WORKSPACE")")-${workspace_hash}-${WEB_PORT}"
         WEB_NETWORK_NAME="${WEB_CONTAINER_NAME}-network"
         WEB_CREDENTIALS_FILE="$WEB_CREDENTIALS_DIR/${WEB_CONTAINER_NAME}.credentials"
     fi
@@ -477,7 +502,7 @@ stat_file_size() {
 }
 
 read_web_credentials() {
-    local mode size username_line password_line extra_line
+    local mode size expected_size username_line password_line extra_line
 
     if [[ -L "$WEB_CREDENTIALS_FILE" || ! -f "$WEB_CREDENTIALS_FILE" ]]; then
         echo "Error: Web server credentials path is not a regular file: $WEB_CREDENTIALS_FILE" >&2
@@ -492,9 +517,15 @@ read_web_credentials() {
         echo "Error: Web server credentials file must have mode 0600: $WEB_CREDENTIALS_FILE" >&2
         return 1
     fi
-    # The fixed format is 141 bytes, including both required trailing newlines.
+    # The fixed format is variant-specific, including both required trailing
+    # newlines. v2's server uses the fixed Basic Auth username `opencode`.
     size="$(stat_file_size "$WEB_CREDENTIALS_FILE")" || return 1
-    if [[ "$size" != "141" ]]; then
+    if [[ "$LAUNCHER_MODE" == "v2" ]]; then
+        expected_size=124
+    else
+        expected_size=141
+    fi
+    if [[ "$size" != "$expected_size" ]]; then
         echo "Error: Web server credentials file is malformed: $WEB_CREDENTIALS_FILE" >&2
         return 1
     fi
@@ -513,8 +544,16 @@ read_web_credentials() {
     fi
     exec 3<&-
 
-    if ! [[ "$username_line" =~ ^OPENCODE_SERVER_USERNAME=(opencode-[0-9a-f]{16})$ ]] \
-        || ! [[ "$password_line" =~ ^OPENCODE_SERVER_PASSWORD=([0-9a-f]{64})$ ]]; then
+    if [[ "$LAUNCHER_MODE" == "v2" ]]; then
+        if [[ "$username_line" != "OPENCODE_SERVER_USERNAME=opencode" ]]; then
+            echo "Error: Web server credentials file is malformed: $WEB_CREDENTIALS_FILE" >&2
+            return 1
+        fi
+    elif ! [[ "$username_line" =~ ^OPENCODE_SERVER_USERNAME=(opencode-[0-9a-f]{16})$ ]]; then
+        echo "Error: Web server credentials file is malformed: $WEB_CREDENTIALS_FILE" >&2
+        return 1
+    fi
+    if ! [[ "$password_line" =~ ^OPENCODE_SERVER_PASSWORD=([0-9a-f]{64})$ ]]; then
         echo "Error: Web server credentials file is malformed: $WEB_CREDENTIALS_FILE" >&2
         return 1
     fi
@@ -554,9 +593,14 @@ create_web_credentials() {
         return
     fi
 
-    username="opencode-$(od -An -N 8 -tx1 /dev/urandom | tr -d ' \n')"
+    if [[ "$LAUNCHER_MODE" == "v2" ]]; then
+        username="opencode"
+    else
+        username="opencode-$(od -An -N 8 -tx1 /dev/urandom | tr -d ' \n')"
+    fi
     password="$(od -An -N 32 -tx1 /dev/urandom | tr -d ' \n')"
-    if ! [[ "$username" =~ ^opencode-[0-9a-f]{16}$ && "$password" =~ ^[0-9a-f]{64}$ ]]; then
+    if ! [[ "$username" == "opencode" || "$username" =~ ^opencode-[0-9a-f]{16}$ ]] \
+        || ! [[ "$password" =~ ^[0-9a-f]{64}$ ]]; then
         echo "Error: Could not generate web server credentials." >&2
         return 1
     fi
@@ -781,7 +825,7 @@ web_server_stop_command() {
     local workspace_argument
 
     printf -v workspace_argument '%q' "$REAL_WORKSPACE"
-    printf 'opencode-container --workspace %s --web-server stop --web-port %s' "$workspace_argument" "$WEB_PORT"
+    printf '%s --workspace %s --web-server stop --web-port %s' "$LAUNCHER_COMMAND" "$workspace_argument" "$WEB_PORT"
 }
 
 web_resource_is_owned() {
@@ -848,7 +892,7 @@ web_container_bind_mode() {
     local bindings binding has_binding=0 has_network_accessible_binding=0
 
     if ! bindings="$(docker container inspect \
-        --format "{{range (index .NetworkSettings.Ports \"$WEB_PORT/tcp\")}}{{println .HostIp}}{{end}}" \
+        --format "{{range (index .NetworkSettings.Ports \"$WEB_PORT/tcp\")}}{{println .HostIP}}{{end}}" \
         "$WEB_INSPECTED_CONTAINER_ID" 2>&1)"; then
         echo "Error: Could not inspect web server port bindings for '$WEB_INSPECTED_CONTAINER_ID': $bindings" >&2
         return 1
@@ -1233,6 +1277,7 @@ if [[ "$WEB_SERVER" == "1" ]]; then
         --publish "${WEB_BIND_ADDRESS}:${WEB_PORT}:${WEB_PORT}"
         --volume "$WEB_CREDENTIALS_FILE:/tmp/opencode-web-credentials:$RO_MOUNT_OPTS"
         --volume "$WEB_ENTRYPOINT:/tmp/opencode-web-entrypoint:$RO_MOUNT_OPTS"
+        --env "OPENCODE_WEB_VARIANT=$LAUNCHER_MODE"
         --network "$WEB_NETWORK_NAME"
         # Override the image entrypoint so custom or stale images cannot skip
         # credential loading; /bin/sh executes the mounted wrapper below.
@@ -1246,7 +1291,7 @@ if [[ "$WEB_SERVER" == "1" ]]; then
         echo "Error: Could not start web server container '$WEB_CONTAINER_NAME'." >&2
         exit 1
     fi
-    if ! wait_for_web_server "http://127.0.0.1:$WEB_PORT/global/health"; then
+    if ! wait_for_web_server "http://127.0.0.1:$WEB_PORT$WEB_HEALTH_PATH"; then
         exit 1
     fi
 
@@ -1261,9 +1306,9 @@ if [[ "$WEB_SERVER" == "1" ]]; then
 fi
 
 if [[ ${#ARGS[@]} -eq 0 ]]; then
-    ARGS=(opencode)
+    ARGS=("$OPENCODE_EXECUTABLE")
 elif [[ "$RAW_COMMAND" != "1" ]]; then
-    ARGS=(opencode "${ARGS[@]}")
+    ARGS=("$OPENCODE_EXECUTABLE" "${ARGS[@]}")
 fi
 
 exec docker run "${DOCKER_ARGS[@]}" "$IMAGE" "${ARGS[@]}"

@@ -26,6 +26,10 @@ ARG UV_INSTALLER_SHA256=
 ARG MARKSMAN_VERSION=latest
 ARG MARKSMAN_SHA256_X86_64=
 ARG MARKSMAN_SHA256_AARCH64=
+ARG OPENCODE2_VERSION=0.0.0-beta-18743
+ARG OPENCODE2_TARBALL_SHA512=20e9c365b0ecb02fd473ed7b3a19a808eee12afe554a817c78464af362c7ac1d2ecae760852c81f1a9ca5bd9e827a89d5d66c7432f0ddabfd73a689f26dd3804
+ARG OPENCODE2_TARBALL_SHA512_X86_64=
+ARG OPENCODE2_TARBALL_SHA512_AARCH64=2704d623c3d05f3aec95d6f2de9a4f781502ee224db04e4464154ee160de143de66f87ae5c5784a7c918a1b5121871de13094c32a486d312f888bea74b46c60a
 
 # Environment variables
 ENV UV_INSTALL_DIR=/usr/local/bin
@@ -141,6 +145,39 @@ RUN set -eu; \
         echo "${MARKSMAN_SHA256}  /usr/local/bin/marksman" | sha256sum -c -; \
     fi; \
     chmod +x /usr/local/bin/marksman
+
+# Install the pinned OpenCode 2.0 preview CLI alongside the stable `opencode`
+# binary supplied by the base image. npm publishes different verified musl
+# artifacts for x86_64 and arm64; stable image builds remain supported on both.
+RUN set -eu; \
+    ARCH="$(uname -m)"; \
+    case "$ARCH" in \
+        x86_64) \
+            OPENCODE2_PACKAGE="cli-linux-x64-baseline-musl"; \
+            OPENCODE2_SHA512="${OPENCODE2_TARBALL_SHA512_X86_64:-${OPENCODE2_TARBALL_SHA512}}"; \
+            ;; \
+        aarch64) \
+            OPENCODE2_PACKAGE="cli-linux-arm64-musl"; \
+            OPENCODE2_SHA512="${OPENCODE2_TARBALL_SHA512_AARCH64}"; \
+            ;; \
+        *) \
+            echo "OpenCode 2 preview has no pinned musl artifact for this architecture (found: $ARCH)" >&2; \
+            exit 1; \
+            ;; \
+    esac; \
+    test -n "$OPENCODE2_SHA512"; \
+    OPENCODE2_URL="https://registry.npmjs.org/@opencode-ai/${OPENCODE2_PACKAGE}/-/${OPENCODE2_PACKAGE}-${OPENCODE2_VERSION}.tgz"; \
+    curl -fsSL "$OPENCODE2_URL" -o /tmp/opencode2.tgz; \
+    echo "${OPENCODE2_SHA512}  /tmp/opencode2.tgz" | sha512sum -c -; \
+    mkdir -p /tmp/opencode2; \
+    tar -xzf /tmp/opencode2.tgz -C /tmp/opencode2; \
+    package_name="$(sed -n 's/.*"name": "\([^"]*\)".*/\1/p' /tmp/opencode2/package/package.json | head -n 1)"; \
+    package_version="$(sed -n 's/.*\"version\": \"\([^\"]*\)\".*/\1/p' /tmp/opencode2/package/package.json | head -n 1)"; \
+    test "$package_name" = "@opencode-ai/$OPENCODE2_PACKAGE"; \
+    test "$package_version" = "$OPENCODE2_VERSION"; \
+    test -x /tmp/opencode2/package/bin/opencode2; \
+    install -m 0755 /tmp/opencode2/package/bin/opencode2 /usr/local/bin/opencode2; \
+    rm -rf /tmp/opencode2 /tmp/opencode2.tgz
 
 # Install nvim wrapper to ensure runtimepath is set correctly
 COPY scripts/nvim-wrapper /usr/local/bin/nvim

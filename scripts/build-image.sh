@@ -37,6 +37,10 @@ add_build_arg_if_set UV_INSTALLER_SHA256
 add_build_arg_if_set MARKSMAN_VERSION
 add_build_arg_if_set MARKSMAN_SHA256_X86_64
 add_build_arg_if_set MARKSMAN_SHA256_AARCH64
+add_build_arg_if_set OPENCODE2_VERSION
+add_build_arg_if_set OPENCODE2_TARBALL_SHA512
+add_build_arg_if_set OPENCODE2_TARBALL_SHA512_X86_64
+add_build_arg_if_set OPENCODE2_TARBALL_SHA512_AARCH64
 
 if [[ -n "${OPENCODE_BUILD_EXTRA_APK_PACKAGES:-}" && -z "${EXTRA_APK_PACKAGES:-}" ]]; then
     DOCKER_BUILD_ARGS+=(--build-arg "EXTRA_APK_PACKAGES=${OPENCODE_BUILD_EXTRA_APK_PACKAGES}")

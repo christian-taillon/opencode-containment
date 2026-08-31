@@ -1,7 +1,10 @@
 # Web Server and Remote Attach
 
-The launcher's `--web-server` mode runs `opencode web` inside a detached
-container with persistent Basic Auth credentials. See the
+The stable launcher's `--web-server` mode runs `opencode web` inside a detached
+container with persistent Basic Auth credentials. The side-by-side
+`opencode2-container --web-server` mode instead runs `opencode2 serve` and
+checks `/api/health`; it keeps the same containment, credential validation, and
+loopback/network opt-in protections. See the
 [README](../README.md#quick-start) for the built-in lifecycle commands
 (`start`, `stop`, `status`, `--web-port`, `--network-accessible`).
 
@@ -11,6 +14,30 @@ This doc covers two related patterns the launcher does not manage for you:
    status) using a custom container image and port.
 2. **Attaching a TUI** to a running web server, including the path
    translation you need when the server runs inside a container.
+
+## OpenCode 2 preview client
+
+The project install does not add a host `opencode2` command. For a server URL
+that is reachable from a container, use the contained preview client:
+
+```bash
+opencode2-container --server http://host.containers.internal:4096
+```
+
+The contained client cannot normally reach a loopback-only host listener at
+`127.0.0.1`; the example requires a server published on a container-reachable
+host address (Podman provides `host.containers.internal`; Docker may require
+its equivalent host-gateway address). For the default loopback server, install
+the separate beta host CLI and connect with `--server`:
+
+```bash
+opencode2 --server http://127.0.0.1:4096
+```
+
+The v2 server uses HTTP Basic Auth with username `opencode`; use the generated
+password from the credentials file reported by `opencode2-container`. The v2
+preview is beta-only, currently x86_64-musl and arm64-musl in this image, and
+v1 plugins do not work with it.
 
 ## systemd service
 

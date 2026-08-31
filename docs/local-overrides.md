@@ -33,5 +33,25 @@ Set `OPENCODE_SYNC_HOST_AUTH=0`, `OPENCODE_SYNC_CONFIG_CACHE=0`, or
 cache/state only; it never replaces `opencode.db` and exits before Docker or
 workspace checks.
 
+## Local plugin development mounts
+
+A `file://` plugin entry that points at a host checkout outside the workspace
+does not load inside the container: the launcher never mounts `$HOME`, and the
+`plugin-meta.json` path rewriting covers only the four OpenCode XDG
+directories. To use such a plugin with the container backend, mount its checkout
+read-only at the exact absolute path used in the plugin URL:
+
+```bash
+# The destination must equal the host path in the plugin's file:// URL.
+DOCKER_ARGS+=(--volume "$HOME/github/opencode-quota:$HOME/github/opencode-quota:ro,Z")
+```
+
+Mount the whole repository, not just `dist/`, so the plugin's bundled
+`node_modules` resolve. Keep the mount read-only and review the code you mount:
+plugins run inside the OpenCode process with access to the workspace and
+mirrored provider auth. Host-built native modules may need a musl-compatible
+rebuild for the Alpine image. These mounts do not apply to the sandbox backend,
+which ignores `DOCKER_ARGS`.
+
 The sandbox backend honors `XDG_CONFIG_HOME` and `XDG_DATA_HOME` for its
 read-only config and auth mirror. It does not share host cache or runtime state.

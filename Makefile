@@ -1,4 +1,4 @@
-.PHONY: help build update setup run run-native run-secure run-sandbox setup-sandbox-policy doctor doctor-sandbox sync-config clean clean-sandbox-smoke shell-install
+.PHONY: help build update setup run run-native run-secure run-sandbox run-opencode2 run-opencode2-sandbox setup-sandbox-policy doctor doctor-sandbox sync-config clean clean-sandbox-smoke shell-install
 
 # Project variables
 PROJECT_NAME := opencode-containment
@@ -9,7 +9,7 @@ help: ## Show all targets with descriptions
 	@echo "========================================"
 	@echo " $(PROJECT_NAME) Makefile"
 	@echo "========================================"
-	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "\033[36m%-15s\033[0m %s\n", $$1, $$2}'
+	@grep -E '^[a-zA-Z0-9_-]+:.*?## .*$$' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "\033[36m%-15s\033[0m %s\n", $$1, $$2}'
 
 build: ## Build the Docker image as opencode-containment:latest
 	IMAGE_NAME=$(IMAGE_NAME) bash scripts/build-image.sh
@@ -34,6 +34,12 @@ run-native: ## Run with native profile
 
 run-sandbox: ## Run the sandbox backend with Docker Sandboxes
 	@bash bin/opencode-sandbox --profile native
+
+run-opencode2: ## Run the OpenCode 2.0 preview container backend
+	@bash bin/opencode2-container --profile native
+
+run-opencode2-sandbox: ## Run the OpenCode 2.0 preview sandbox backend
+	@bash bin/opencode2-sandbox --profile native
 
 sync-config: ## Force-refresh OpenCode cache/state from host into container persistent state
 	@bash bin/opencode-container --sync-config
@@ -87,5 +93,11 @@ shell-install: ## Install opencode launchers to ~/.local/bin (symlinks)
 	@mkdir -p $(HOME)/.local/bin
 	@ln -sf $(PWD)/bin/opencode-container $(HOME)/.local/bin/opencode-container
 	@ln -sf $(PWD)/bin/opencode-sandbox $(HOME)/.local/bin/opencode-sandbox
+	@ln -sf $(PWD)/bin/opencode2-container $(HOME)/.local/bin/opencode2-container
+	@ln -sf $(PWD)/bin/opencode2-containment $(HOME)/.local/bin/opencode2-containment
+	@ln -sf $(PWD)/bin/opencode2-sandbox $(HOME)/.local/bin/opencode2-sandbox
 	@echo "Installed opencode-container to $(HOME)/.local/bin/opencode-container"
 	@echo "Installed opencode-sandbox to $(HOME)/.local/bin/opencode-sandbox"
+	@echo "Installed opencode2-container to $(HOME)/.local/bin/opencode2-container"
+	@echo "Installed opencode2-containment to $(HOME)/.local/bin/opencode2-containment"
+	@echo "Installed opencode2-sandbox to $(HOME)/.local/bin/opencode2-sandbox"

@@ -51,21 +51,44 @@ if [[ -f "$LOCAL_HOOK" ]]; then
     source "$LOCAL_HOOK"
 fi
 
+# The v2 wrappers select this mode with a private positional marker. Resolve it
+# after the local hook so environment defaults cannot change the executable.
+LAUNCHER_MODE="stable"
+if [[ "${1:-}" == "--__opencode2" ]]; then
+    LAUNCHER_MODE="v2"
+    shift
+fi
+if [[ "$LAUNCHER_MODE" == "v2" ]]; then
+    LAUNCHER_COMMAND="opencode2-sandbox"
+    OPENCODE_EXECUTABLE="opencode2"
+else
+    LAUNCHER_COMMAND="opencode-sandbox"
+    OPENCODE_EXECUTABLE="opencode"
+fi
+
 PROFILE="${OPENCODE_PROFILE:-native}"
 WORKSPACE="${OPENCODE_WORKSPACE:-$PWD}"
 SANDBOX_NAME="${OPENCODE_SANDBOX_NAME:-}"
 SANDBOX_MEMORY="${OPENCODE_SANDBOX_MEMORY:-8g}"
 SANDBOX_CPUS="${OPENCODE_SANDBOX_CPUS:-4}"
-SANDBOX_TEMPLATE="${OPENCODE_SANDBOX_TEMPLATE:-}"
+if [[ "$LAUNCHER_MODE" == "v2" ]]; then
+    SANDBOX_TEMPLATE="${OPENCODE2_SANDBOX_TEMPLATE:-${OPENCODE_SANDBOX_TEMPLATE:-localhost/opencode-containment:latest}}"
+else
+    SANDBOX_TEMPLATE="${OPENCODE_SANDBOX_TEMPLATE:-}"
+fi
 SBX_BIN="${OPENCODE_SBX_BIN:-sbx}"
 OPENCODE_CONFIG_DIR="${OPENCODE_CONFIG_DIR:-${XDG_CONFIG_HOME:-$HOME/.config}/opencode}"
 OPENCODE_HOST_STATE_DIR="${OPENCODE_HOST_STATE_DIR:-${XDG_DATA_HOME:-$HOME/.local/share}/opencode}"
-OPENCODE_SANDBOX_STATE_DIR="${OPENCODE_SANDBOX_STATE_DIR:-${XDG_DATA_HOME:-$HOME/.local/share}/opencode-sandbox}"
+if [[ "$LAUNCHER_MODE" == "v2" ]]; then
+    OPENCODE_SANDBOX_STATE_DIR="${OPENCODE2_SANDBOX_STATE_DIR:-${OPENCODE_SANDBOX_STATE_DIR:-${XDG_DATA_HOME:-$HOME/.local/share}/opencode2-sandbox}}"
+else
+    OPENCODE_SANDBOX_STATE_DIR="${OPENCODE_SANDBOX_STATE_DIR:-${XDG_DATA_HOME:-$HOME/.local/share}/opencode-sandbox}"
+fi
 OPENCODE_SYNC_HOST_AUTH="${OPENCODE_SYNC_HOST_AUTH:-1}"
 
 show_help() {
     cat <<EOF
-Usage: opencode-sandbox [OPTIONS] [-- ARGS...]
+Usage: $LAUNCHER_COMMAND [OPTIONS] [-- ARGS...]
 
 Options:
   --profile PROFILE   Profile label to export inside the sandbox (default: OPENCODE_PROFILE or native)
@@ -91,11 +114,13 @@ Notes:
     local host mounts and overrideable docker args do not apply here.
   - Default sandbox sizing is explicit for predictable host impact.
   - Pass OpenCode arguments after "--".
+  - This launcher runs '$OPENCODE_EXECUTABLE'. The v2 preview uses the local
+    containment image as its default sandbox template.
 
 Examples:
-  opencode-sandbox
-  opencode-sandbox -- --continue
-  opencode-sandbox --memory 12g --cpus 6
+  $LAUNCHER_COMMAND
+  $LAUNCHER_COMMAND -- --continue
+  $LAUNCHER_COMMAND --memory 12g --cpus 6
 EOF
 }
 
@@ -164,7 +189,11 @@ if [[ "$REAL_WORKSPACE" != "$START_DIR" && "$REAL_WORKSPACE" != "$START_DIR"/* ]
 fi
 
 if [[ -z "$SANDBOX_NAME" ]]; then
-    SANDBOX_NAME="opencode-$(sanitize_sandbox_name "$(basename "$REAL_WORKSPACE")")"
+    if [[ "$LAUNCHER_MODE" == "v2" ]]; then
+        SANDBOX_NAME="opencode2-$(sanitize_sandbox_name "$(basename "$REAL_WORKSPACE")")"
+    else
+        SANDBOX_NAME="opencode-$(sanitize_sandbox_name "$(basename "$REAL_WORKSPACE")")"
+    fi
 fi
 
 if ! command -v "$SBX_BIN" >/dev/null 2>&1; then
@@ -254,4 +283,4 @@ if [[ -t 0 && -t 1 ]]; then
     EXEC_ARGS+=(-i -t)
 fi
 
-exec "$SBX_BIN" exec "${EXEC_ARGS[@]}" "$SANDBOX_NAME" opencode "${ARGS[@]}"
+exec "$SBX_BIN" exec "${EXEC_ARGS[@]}" "$SANDBOX_NAME" "$OPENCODE_EXECUTABLE" "${ARGS[@]}"

@@ -3,6 +3,9 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 LAUNCHER="$SCRIPT_DIR/bin/opencode-container"
+V2_CONTAINER_LAUNCHER="$SCRIPT_DIR/bin/opencode2-container"
+V2_CONTAINMENT_LAUNCHER="$SCRIPT_DIR/bin/opencode2-containment"
+V2_SANDBOX_LAUNCHER="$SCRIPT_DIR/bin/opencode2-sandbox"
 TEST_DIR="$(mktemp -d)"
 trap 'rm -rf "$TEST_DIR"' EXIT
 
@@ -95,6 +98,8 @@ OUTPUT="$TEST_DIR/output"
 INSTALLED_BIN="$TEST_DIR/installed-bin"
 LINKED_LAUNCHER="$INSTALLED_BIN/opencode-container"
 DOCKER_RUN_ID="aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+SBX_LOG="$TEST_DIR/sbx-log"
+SBX_STATE="$TEST_DIR/sbx-state"
 mkdir -p "$FAKE_BIN" "$WORKSPACE" "$TEST_HOME" "$INSTALLED_BIN"
 ln -s "$LAUNCHER" "$LINKED_LAUNCHER"
 
@@ -332,6 +337,34 @@ exit 0
 EOF
 chmod +x "$FAKE_BIN/sleep"
 
+cat > "$FAKE_BIN/sbx" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+
+printf '%s\n' "$*" >> "$SBX_LOG"
+case "${1:-}" in
+    ls)
+        [[ -f "$SBX_STATE" ]] && cat "$SBX_STATE"
+        ;;
+    create)
+        name=""
+        for ((index = 1; index <= $#; index++)); do
+            if [[ "${!index}" == "--name" ]]; then
+                next=$((index + 1))
+                name="${!next}"
+            fi
+        done
+        printf '%s\n' "$name" > "$SBX_STATE"
+        ;;
+    exec)
+        ;;
+    *)
+        exit 1
+        ;;
+esac
+EOF
+chmod +x "$FAKE_BIN/sbx"
+
 run_launcher_with() {
     local launcher="$1"
     shift
@@ -371,6 +404,8 @@ run_launcher_from_with() {
             CURL_UNAUTH_STATUS="${CURL_UNAUTH_STATUS:-401}" \
             CURL_AUTH_STATUS="${CURL_AUTH_STATUS:-200}" \
             CURL_EVENTS="$CURL_EVENTS" \
+            SBX_LOG="$SBX_LOG" \
+            SBX_STATE="$SBX_STATE" \
             CHMOD_SIGNAL="${CHMOD_SIGNAL:-}" \
             SLEEP_SIGNAL="${SLEEP_SIGNAL:-}" \
             HOME="$TEST_HOME" \
@@ -394,6 +429,10 @@ reset_docker_artifacts() {
     rm -f "$DOCKER_LOG" "$DOCKER_EVENTS" "$DOCKER_CREATED_CONTAINER_FILE" "$DOCKER_NETWORK_STATE_FILE" "$CURL_EVENTS"
 }
 
+reset_sbx_artifacts() {
+    rm -f "$SBX_LOG" "$SBX_STATE"
+}
+
 assert_no_temporary_web_files() {
     local temporary_files
 
@@ -411,6 +450,21 @@ reset_docker_artifacts
 run_launcher start > "$OUTPUT"
 mapfile -t docker_args < "$DOCKER_LOG"
 assert_command_tail opencode start
+
+reset_docker_artifacts
+run_launcher_with "$V2_CONTAINER_LAUNCHER" auth ls > "$OUTPUT"
+mapfile -t docker_args < "$DOCKER_LOG"
+assert_command_tail opencode2 auth ls
+
+reset_docker_artifacts
+run_launcher_with "$V2_CONTAINMENT_LAUNCHER" --version > "$OUTPUT"
+mapfile -t docker_args < "$DOCKER_LOG"
+assert_command_tail opencode2 --version
+
+reset_docker_artifacts
+run_launcher_with "$V2_CONTAINER_LAUNCHER" --server http://host.containers.internal:4096 > "$OUTPUT"
+mapfile -t docker_args < "$DOCKER_LOG"
+assert_command_tail opencode2 --server http://host.containers.internal:4096
 
 reset_docker_artifacts
 run_launcher_with "$LINKED_LAUNCHER" --web-server --web-port 4701 > "$OUTPUT"
@@ -746,6 +800,33 @@ assert_event "logs $container_id"
 assert_event "rm -f $container_id"
 assert_event "network rm $DOCKER_NETWORK_ID"
 assert_no_temporary_web_files
+
+reset_docker_artifacts
+reset_sbx_artifacts
+run_launcher_with "$V2_CONTAINER_LAUNCHER" --web-server start --web-port 4703 > "$OUTPUT"
+mapfile -t docker_args < "$DOCKER_LOG"
+v2_workspace_hash="$workspace_hash"
+v2_container_name="opencode2-web-workspace-${v2_workspace_hash}-4703"
+v2_network_name="${v2_container_name}-network"
+v2_credentials_file="$CONTAINER_HOME/web-server/${v2_container_name}.credentials"
+assert_arg_pair --env OPENCODE_WEB_VARIANT=v2
+assert_arg_pair --publish "127.0.0.1:4703:4703"
+assert_arg_pair --name "$v2_container_name"
+assert_command_tail /tmp/opencode-web-entrypoint 4703
+assert_line "  Stop and remove: opencode2-container --workspace $WORKSPACE --web-server stop --web-port 4703" "$OUTPUT"
+assert_line "  Basic Auth credentials: $v2_credentials_file" "$OUTPUT"
+grep -Fq -- "http://127.0.0.1:4703/api/health" "$CURL_EVENTS" || fail "v2 readiness must use /api/health"
+[[ "$(head -n 1 "$v2_credentials_file")" == "OPENCODE_SERVER_USERNAME=opencode" ]] || fail "v2 must use the fixed Basic Auth username"
+[[ "$(stat -c '%s' "$v2_credentials_file")" == "124" ]] || fail "v2 credentials file has unexpected size"
+run_launcher_with "$V2_CONTAINER_LAUNCHER" --web-server stop --web-port 4703 > "$OUTPUT"
+assert_event "rm -f $DOCKER_RUN_ID"
+assert_event "network rm $DOCKER_NETWORK_ID"
+
+reset_sbx_artifacts
+run_launcher_with "$V2_SANDBOX_LAUNCHER" --workspace "$WORKSPACE" -- --continue > "$OUTPUT"
+assert_line "create --name opencode2-workspace --memory 8g --cpus 4 --template localhost/opencode-containment:latest opencode $WORKSPACE" "$SBX_LOG"
+grep -Fq -- "exec -e OPENCODE_PROFILE=native" "$SBX_LOG" || fail "v2 sandbox must export the profile"
+grep -Fq -- "opencode2 --continue" "$SBX_LOG" || fail "v2 sandbox must execute opencode2"
 
 reset_docker_artifacts
 if DOCKER_NETWORK_SIGNAL=TERM run_launcher --web-server --web-port 4701 > "$OUTPUT" 2>&1; then
