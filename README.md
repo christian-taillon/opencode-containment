@@ -151,6 +151,40 @@ Use `--` only when you want to run a raw command in the container:
 opencode-container -- bash
 ```
 
+Import a small, explicit set of host executables for one container launch:
+
+```bash
+opencode-container --with-tool rg --with-tool /usr/local/bin/my-tool -- bash
+```
+
+`--with-tool` may be repeated and must appear before `--`. A bare name is
+resolved by Bash's external-command-only lookup (`type -P`) using the host
+PATH; shell builtins, functions, aliases, and unresolved names are rejected.
+An explicit path is canonicalized to a regular executable file (including its
+symlink target). Each selected file is copied into a private per-launch
+staging directory and mounted read-only at `/opt/opencode-tools` with
+the snapshot files set to mode `0555`; the original host file is never mounted,
+and edits after the snapshot completes do not change that snapshot. The selected
+basenames are prepended to a fixed container PATH, not the host PATH, so a
+selected name intentionally takes precedence over an image command with the
+same name. Duplicate basenames are
+rejected. The staging directory is removed when the launcher exits (an
+uncatchable `SIGKILL` can leave an orphan for manual cleanup).
+Docker uses a `:ro` bind mount; Podman adds its `:Z` SELinux relabel option.
+The source is opened before copying to close replacement races after open; a
+host process changing the path during the narrow validation/open window or
+writing in place during the copy remains outside this shell-level guarantee.
+
+This option is supported by the stable and `opencode2-container` launchers,
+including raw and interactive launches. It is rejected with `--web-server`.
+It is intended for WSL2 + Docker on Windows and Bash + Docker on Linux or
+macOS; native PowerShell and Git Bash launchers are not supported. Only the
+selected executable is imported: a selected symlink is snapshotted from its
+resolved target, but additional symlink targets and companion
+libraries/support files are not copied. Scripts need an interpreter and
+dependencies inside the image, and host glibc/Electron/desktop binaries may
+fail in the Alpine image; host IPC is not available.
+
 Force-refresh host OpenCode cache and state into isolated container storage
 without launching a container:
 
@@ -415,11 +449,12 @@ Config content is resolved in this order:
 
 Both launchers accept CLI flags that mirror many of these environment variables. Run the launcher with `--help` for the full list. For example:
 
-- `opencode-container --profile`, `--image`, `--workspace`, `--web-server`, `--web-port`, `--network-accessible`, `--sync-config`, `--help`
+- `opencode-container --profile`, `--image`, `--workspace`, `--with-tool`, `--web-server`, `--web-port`, `--network-accessible`, `--sync-config`, `--help`
 - `opencode-sandbox --profile`, `--workspace`, `--name`, `--memory`, `--cpus`, `--template`, `--help`
 
-The same options are available through `opencode2-container` and
-`opencode2-sandbox`; v2 container web mode uses `opencode2 serve` internally.
+The container options are also available through `opencode2-container`; the
+sandbox launchers do not support `--with-tool`. v2 container web mode uses
+`opencode2 serve` internally.
 
 ### Build and Version Strategy
 

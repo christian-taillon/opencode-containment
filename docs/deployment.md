@@ -72,6 +72,13 @@ All mounts use `:Z` for SELinux relabeling (host is SELinux Enforcing).
 
 **Not mounted**: private SSH keys, `.env` files, Docker socket, `/`, `$HOME`.
 
+Foreground launcher invocations may additionally use repeatable
+`--with-tool COMMAND_OR_PATH`. Each selected executable is snapshotted into a
+private temporary directory and mounted read-only at `/opt/opencode-tools` with
+snapshot files set to mode `0555`; the original host executable is not mounted.
+The detached web-server deployment does not accept this option. Docker uses
+`:ro`; Podman adds its `:Z` SELinux relabel option.
+
 ## Container hardening
 
 The container runs with strong containment defaults:

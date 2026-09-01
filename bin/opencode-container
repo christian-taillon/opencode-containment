@@ -49,6 +49,208 @@ resolve_path() {
     )
 }
 
+# Resolve a selected host executable without relying on GNU readlink -f. The
+# result is always an absolute, non-symlink path to the file that will be
+# copied into the per-launch staging directory.
+resolve_tool_path() {
+    local target="$1" resolved directory link_target readlink_bin realpath_bin depth
+
+    if [[ "$target" != /* ]]; then
+        target="$PWD/$target"
+    fi
+
+    realpath_bin="$(builtin type -P -- realpath 2>/dev/null || true)"
+    if [[ -n "$realpath_bin" ]]; then
+        resolved="$($realpath_bin "$target" 2>/dev/null)" || return 1
+    else
+        resolved="$target"
+        for ((depth = 0; depth < 40 && -L "$resolved"; depth++)); do
+            directory="$(cd -P "$(dirname "$resolved")" && pwd)" || return 1
+            readlink_bin="$(builtin type -P -- readlink 2>/dev/null || true)"
+            [[ -n "$readlink_bin" ]] || return 1
+            link_target="$($readlink_bin "$resolved" 2>/dev/null)" || return 1
+            [[ "$link_target" != *$'\n'* && "$link_target" != *$'\r'* ]] || return 1
+            if [[ "$link_target" == /* ]]; then
+                resolved="$link_target"
+            else
+                resolved="$directory/$link_target"
+            fi
+        done
+        [[ ! -L "$resolved" ]] || return 1
+        directory="$(cd -P "$(dirname "$resolved")" && pwd)" || return 1
+        resolved="$directory/$(basename "$resolved")"
+    fi
+
+    [[ "$resolved" == /* && "$resolved" != *$'\n'* && "$resolved" != *$'\r'* ]] || return 1
+    [[ -f "$resolved" && -x "$resolved" && ! -L "$resolved" ]] || return 1
+    printf '%s\n' "$resolved"
+}
+
+tool_spec_is_unsafe() {
+    local spec="$1"
+
+    [[ -n "$spec" && "$spec" != -* && "$spec" != *$'\n'* && "$spec" != *$'\r'* ]]
+}
+
+cleanup_tool_staging() {
+    if [[ -n "${TOOLS_STAGE_DIR:-}" ]]; then
+        rm -rf "$TOOLS_STAGE_DIR" 2>/dev/null || \
+            echo "Warning: Could not remove temporary tool staging directory: $TOOLS_STAGE_DIR" >&2
+        TOOLS_STAGE_DIR=""
+    fi
+}
+
+snapshot_tool_file() {
+    local source="$1" destination="$2" source_fd_path
+
+    # Open the source before copying it. The descriptor protects reads from
+    # later pathname replacement; in-place edits can still affect bytes during
+    # the copy. Bash 3.2 has no dynamic-FD syntax, so use a fixed descriptor
+    # and the portable /dev/fd interface available on Linux and macOS.
+    if ! exec 3< "$source"; then
+        return 1
+    fi
+    if [[ -e /dev/fd/3 ]]; then
+        source_fd_path="/dev/fd/3"
+    elif [[ -e /proc/self/fd/3 ]]; then
+        source_fd_path="/proc/self/fd/3"
+    else
+        exec 3<&- || true
+        return 1
+    fi
+    if [[ ! -f "$source_fd_path" || ! -x "$source_fd_path" ]] \
+        || [[ ! -f "$source" || ! -x "$source" || -L "$source" ]]; then
+        exec 3<&- || true
+        return 1
+    fi
+
+    # The private staging directory is empty and owned by this launcher. Keep
+    # noclobber enabled while creating a fresh regular file, then use a fixed
+    # non-writable mode rather than copying source metadata or setuid bits.
+    if ! (umask 077; set -C; cat <&3 > "$destination"); then
+        exec 3<&- || true
+        return 1
+    fi
+    exec 3<&- || true
+    if [[ -L "$destination" || ! -f "$destination" || ! -O "$destination" ]] \
+        || ! chmod 0555 "$destination" \
+        || [[ ! -f "$destination" || ! -x "$destination" ]]; then
+        rm -f "$destination"
+        return 1
+    fi
+}
+
+forward_tool_launch_signal() {
+    local signal="$1"
+
+    if [[ -n "${TOOLS_CHILD_PID:-}" && "${TOOLS_CHILD_REAPED:-0}" != "1" ]]; then
+        kill -s "$signal" "$TOOLS_CHILD_PID" 2>/dev/null || true
+    else
+        TOOLS_PENDING_SIGNAL="$signal"
+    fi
+}
+
+tool_launch_exit_trap() {
+    local exit_status="$1"
+
+    # An unexpected shell exit must not strand the docker CLI (and therefore a
+    # container). Signal traps are disabled before waiting so cleanup cannot be
+    # re-entered by a repeated terminal signal.
+    trap - EXIT INT TERM HUP
+    if [[ "${TOOLS_CHILD_REAPED:-0}" != "1" && -n "${TOOLS_CHILD_PID:-}" ]]; then
+        kill -TERM "$TOOLS_CHILD_PID" 2>/dev/null || true
+        while kill -0 "$TOOLS_CHILD_PID" 2>/dev/null; do
+            if wait "$TOOLS_CHILD_PID"; then
+                :
+            else
+                :
+            fi
+        done
+        TOOLS_CHILD_REAPED=1
+    fi
+    cleanup_tool_staging
+    exit "$exit_status"
+}
+
+prepare_tool_staging() {
+    local spec resolved basename existing index
+    TOOL_RESOLVED_PATHS=()
+    TOOL_DEST_BASENAMES=()
+
+    for spec in "${WITH_TOOLS[@]}"; do
+        if ! tool_spec_is_unsafe "$spec"; then
+            echo "Error: --with-tool value '$spec' is unsafe; use an executable name or path without a leading '-' or newline." >&2
+            return 1
+        fi
+
+        if [[ "$spec" != */* ]]; then
+            # `type -P` deliberately ignores aliases, functions, and shell
+            # builtins. Check the shell type separately so a name such as
+            # `cd` is not accepted merely because an external /usr/bin/cd also
+            # exists on the host.
+            case "$(builtin type -t -- "$spec" 2>/dev/null || true)" in
+                builtin|function|alias|keyword)
+                    echo "Error: --with-tool '$spec' is a shell builtin, function, alias, or keyword; select an external executable instead." >&2
+                    return 1
+                    ;;
+            esac
+            resolved="$(builtin type -P -- "$spec" 2>/dev/null || true)"
+            if [[ -z "$resolved" || "$resolved" == *$'\n'* || "$resolved" == *$'\r'* ]]; then
+                echo "Error: --with-tool '$spec' could not be resolved to a regular executable file." >&2
+                return 1
+            fi
+            basename="$spec"
+        else
+            resolved="$spec"
+            basename="${spec##*/}"
+        fi
+
+        resolved="$(resolve_tool_path "$resolved" 2>/dev/null || true)"
+        if [[ -z "$resolved" ]]; then
+            echo "Error: --with-tool '$spec' could not be resolved to a regular executable file." >&2
+            return 1
+        fi
+        if [[ -z "$basename" || "$basename" == "." || "$basename" == ".." || "$basename" == *$'\n'* || "$basename" == *$'\r'* ]]; then
+            echo "Error: --with-tool '$spec' has an unsafe destination basename." >&2
+            return 1
+        fi
+        for index in "${!TOOL_DEST_BASENAMES[@]}"; do
+            existing="${TOOL_DEST_BASENAMES[index]}"
+            if [[ "$existing" == "$basename" ]]; then
+                echo "Error: --with-tool '$spec' duplicates destination basename '$basename'." >&2
+                return 1
+            fi
+        done
+        TOOL_RESOLVED_PATHS+=("$resolved")
+        TOOL_DEST_BASENAMES+=("$basename")
+    done
+
+    TOOLS_STAGE_DIR="$(mktemp -d "$OPENCODE_CONTAINER_HOME/.opencode-tools.XXXXXX" 2>/dev/null || true)"
+    if [[ -z "$TOOLS_STAGE_DIR" || ! -d "$TOOLS_STAGE_DIR" || -L "$TOOLS_STAGE_DIR" || ! -O "$TOOLS_STAGE_DIR" ]]; then
+        echo "Error: Could not create private tool staging directory." >&2
+        TOOLS_STAGE_DIR=""
+        return 1
+    fi
+    # Cover signals received while later files are being copied as well as
+    # signals received while docker run is active.
+    trap 'cleanup_tool_staging' EXIT
+    if ! chmod 700 "$TOOLS_STAGE_DIR"; then
+        echo "Error: Could not secure private tool staging directory." >&2
+        cleanup_tool_staging
+        return 1
+    fi
+
+    for index in "${!TOOL_RESOLVED_PATHS[@]}"; do
+        resolved="${TOOL_RESOLVED_PATHS[index]}"
+        basename="${TOOL_DEST_BASENAMES[index]}"
+        if ! snapshot_tool_file "$resolved" "$TOOLS_STAGE_DIR/$basename"; then
+            echo "Error: Could not snapshot --with-tool '$resolved' into the private staging directory." >&2
+            cleanup_tool_staging
+            return 1
+        fi
+    done
+}
+
 resolve_web_lifecycle_workspace() {
     local target="$1" base
 
@@ -155,6 +357,12 @@ WEB_ENTRYPOINT="$SCRIPT_DIR/scripts/web-server-entrypoint.sh"
 WEB_OWNERSHIP_LABEL_KEY="io.opencode-containment.web-server"
 WEB_OWNERSHIP_LABEL_VALUE="true"
 WEB_LEGACY_LABEL_KEY="io.opencode-containment.web-launch-id"
+TOOLS_CONTAINER_PATH="/opt/opencode-tools"
+# Keep the image's normal fixed PATH while avoiding propagation of the host
+# PATH. The Dockerfile prepends cargo/bin and local/bin to this Alpine base
+# PATH; the selected tools are intentionally first so their names are usable
+# without an absolute path.
+CONTAINER_DEFAULT_PATH="/usr/local/cargo/bin:/usr/local/bin:/usr/local/sbin:/usr/sbin:/usr/bin:/sbin:/bin"
 
 show_help() {
     cat <<EOF
@@ -165,6 +373,9 @@ Options:
   --profile PROFILE   Profile to use: secure or native (default: OPENCODE_PROFILE or secure)
   --image IMAGE       Container image to use (default: OPENCODE_IMAGE or opencode-containment:latest)
   --workspace DIR     Workspace directory to mount (default: OPENCODE_WORKSPACE or current directory)
+  --with-tool COMMAND_OR_PATH
+                       Snapshot and expose one host executable for this launch;
+                       may be repeated, but must appear before '--'
   --web-server        Manage OpenCode's web server in a detached Docker container
   --web-port PORT     Port for the web server (default: OPENCODE_WEB_PORT or 4096)
   --network-accessible
@@ -177,8 +388,14 @@ Behavior:
      Example: $LAUNCHER_COMMAND auth ls
   With '--', arguments are executed as a raw container command.
     Example: $LAUNCHER_COMMAND -- bash
+  --with-tool resolves bare names through the host shell's external-command PATH,
+  then snapshots each selected file read-only under $TOOLS_CONTAINER_PATH.
+  The namespace is prepended to the container's fixed PATH; it does not pass
+  the host PATH, import additional symlink targets, or import host dependencies.
+  --with-tool requires a container launch and cannot be combined with
+  --web-server or --sync-config.
   --web-server starts the server by default; its commands are start, stop, and status.
-  --web-server cannot be combined with OpenCode or raw command arguments.
+  --web-server cannot be combined with --with-tool, OpenCode, or raw command arguments.
 
 Variant:
   This launcher uses '$OPENCODE_EXECUTABLE'. The opencode2 launcher is a beta
@@ -214,6 +431,7 @@ EOF
 
 # Parse arguments
 ARGS=()
+WITH_TOOLS=()
 RAW_COMMAND=0
 SYNC_CONFIG_ONLY=0
 WEB_SERVER=0
@@ -233,6 +451,14 @@ while [[ $# -gt 0 ]]; do
             ;;
         --workspace)
             WORKSPACE="$2"
+            shift 2
+            ;;
+        --with-tool)
+            if [[ $# -lt 2 || "$2" == --* ]]; then
+                echo "Error: --with-tool requires a command or path value." >&2
+                exit 1
+            fi
+            WITH_TOOLS+=("$2")
             shift 2
             ;;
         --web-server)
@@ -301,6 +527,10 @@ if [[ "$WEB_SERVER" == "1" ]]; then
         echo "Error: --web-server cannot be combined with --sync-config." >&2
         exit 1
     fi
+    if ((${#WITH_TOOLS[@]} != 0)); then
+        echo "Error: --web-server cannot be combined with --with-tool." >&2
+        exit 1
+    fi
     if [[ "$RAW_COMMAND" == "1" || ${#ARGS[@]} -ne 0 ]]; then
         echo "Error: --web-server cannot be combined with OpenCode or raw command arguments." >&2
         exit 1
@@ -319,6 +549,11 @@ elif [[ "$WEB_PORT_SET" == "1" || "$WEB_NETWORK_ACCESSIBLE" == "1" ]]; then
     else
         echo "Error: --network-accessible requires --web-server start." >&2
     fi
+    exit 1
+fi
+
+if [[ "$SYNC_CONFIG_ONLY" == "1" && ${#WITH_TOOLS[@]} -ne 0 ]]; then
+    echo "Error: --with-tool cannot be combined with --sync-config." >&2
     exit 1
 fi
 
@@ -1231,6 +1466,23 @@ elif [[ "$PROFILE" != "secure" ]]; then
     exit 1
 fi
 
+# Stage selected executables only after all non-launch validation has passed.
+# The source files are never mounted: the temporary copies are the only paths
+# relabeled by Podman and mounted into the container.
+if ((${#WITH_TOOLS[@]} != 0)); then
+    if ! prepare_tool_staging; then
+        exit 1
+    fi
+    # Keep bind syntax accepted by both Docker and Podman. RO_MOUNT_OPTS adds
+    # Podman's SELinux relabel only on Podman; file mode and container
+    # hardening provide the remaining boundary for this snapshot.
+    TOOL_MOUNT_OPTS="$RO_MOUNT_OPTS"
+    DOCKER_ARGS+=(
+        --volume "$TOOLS_STAGE_DIR:$TOOLS_CONTAINER_PATH:$TOOL_MOUNT_OPTS"
+        --env "PATH=$TOOLS_CONTAINER_PATH:$CONTAINER_DEFAULT_PATH"
+    )
+fi
+
 # Execute docker run
 if [[ "$WEB_SERVER" == "1" ]]; then
     if ! command -v curl >/dev/null 2>&1; then
@@ -1309,6 +1561,54 @@ if [[ ${#ARGS[@]} -eq 0 ]]; then
     ARGS=("$OPENCODE_EXECUTABLE")
 elif [[ "$RAW_COMMAND" != "1" ]]; then
     ARGS=("$OPENCODE_EXECUTABLE" "${ARGS[@]}")
+fi
+
+if ((${#WITH_TOOLS[@]} != 0)); then
+    # Do not exec here: an exec'd launcher cannot remove the host-side
+    # snapshot. Explicitly duplicate stdin because Bash gives asynchronous
+    # commands /dev/null when job control is disabled. This retains the former
+    # interactive and raw-command behavior while we forward terminal signals
+    # to the Docker CLI and wait for it to exit.
+    TOOLS_CHILD_PID=""
+    TOOLS_CHILD_REAPED=0
+    TOOLS_PENDING_SIGNAL=""
+    trap 'tool_launch_exit_trap $?' EXIT
+    trap 'forward_tool_launch_signal INT' INT
+    trap 'forward_tool_launch_signal TERM' TERM
+    trap 'forward_tool_launch_signal HUP' HUP
+
+    docker run "${DOCKER_ARGS[@]}" "$IMAGE" "${ARGS[@]}" <&0 &
+    TOOLS_CHILD_PID=$!
+    if [[ -n "$TOOLS_PENDING_SIGNAL" ]]; then
+        forward_tool_launch_signal "$TOOLS_PENDING_SIGNAL"
+        TOOLS_PENDING_SIGNAL=""
+    fi
+
+    docker_status=0
+    while :; do
+        if wait "$TOOLS_CHILD_PID"; then
+            docker_status=$?
+            break
+        else
+            docker_status=$?
+        fi
+        # Bash can interrupt wait(2) with the signal status while the Docker
+        # CLI is still alive. Reap it rather than exiting and leaving a
+        # container behind. A real Docker exit status is returned directly.
+        case "$docker_status" in
+            129|130|143)
+                if kill -0 "$TOOLS_CHILD_PID" 2>/dev/null; then
+                    continue
+                fi
+                ;;
+        esac
+        break
+    done
+    TOOLS_CHILD_REAPED=1
+    cleanup_tool_staging
+    trap - EXIT
+    trap - INT TERM HUP
+    exit "$docker_status"
 fi
 
 exec docker run "${DOCKER_ARGS[@]}" "$IMAGE" "${ARGS[@]}"

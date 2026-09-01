@@ -67,6 +67,7 @@ with the v2 preview, and its CLI/server interface may change upstream.
 | `--init` | Active | Init process (tini) for signal handling and zombie reaping |
 | `--user $(id -u):$(id -g)` | Active | Non-root user mapping |
 | `--rm` | Active for normal launches | Interactive and raw-command containers are removed on exit; detached web-server containers are deliberately retained until lifecycle `stop` removes verified-owned resources. |
+| Per-launch host tool import | Active when requested | Selected external executables are copied into a private launcher-owned directory with fixed non-writable mode `0555`, mounted read-only at `/opt/opencode-tools`, and exposed through a fixed container PATH. Original host files are never mounted. |
 | Web-server listener | Guarded | Detached web servers are long-lived HTTP listeners with per-workspace/port Basic Auth credentials stored mode `0600`; loopback is the default bind and `--network-accessible` is an explicit LAN opt-in. |
 | Workspace guardrails | Active for mounts | Start/run rejects `/`, `$HOME`, and out-of-tree mounts. Lifecycle status/stop only addresses existing labeled Docker resources and can use the original canonical workspace path after deletion. |
 | Host config mounts | Read-only | `.gitconfig`, `.ssh/config`, `.ssh/known_hosts`, OpenCode config, GitHub CLI config |
@@ -133,6 +134,7 @@ with the v2 preview, and its CLI/server interface may change upstream.
 | Stronger isolation (microVM) | Available | Use `make run-sandbox` for Docker Sandboxes-backed isolation. |
 | AppArmor pinning | Not provided | AppArmor is applied only when the Docker runtime's default profile is active. On hosts without AppArmor, the launcher does not pin an explicit profile. Pin it in `opencode-local.sh` with `DOCKER_ARGS+=(--security-opt apparmor=docker-default)` if your runtime supports it. |
 | `opencode-local.sh` can defeat containment | Accepted | The local override hook can add unsafe mounts, privileges, or credentials. This is the same tradeoff Distrobox makes. Documented forbidden patterns; cannot enforce programmatically without removing the hook entirely, which kills usability. |
+| Selected host executable behavior | Accepted with explicit opt-in | `--with-tool` imports only the requested executable snapshot (a selected symlink is copied from its resolved target). Additional symlink targets, libraries, interpreters, desktop/IPC support, and host glibc compatibility are not provided automatically; the executable still runs inside the container with the container's permissions and network. The opened source descriptor closes replacement races after open, but not hostile changes during validation/open or in-place writes during copying. |
 
 ## Vulnerability Scanning
 

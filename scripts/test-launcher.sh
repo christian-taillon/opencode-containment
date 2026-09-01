@@ -97,11 +97,25 @@ DOCKER_REPLACEMENT_NETWORK_ID="eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee
 OUTPUT="$TEST_DIR/output"
 INSTALLED_BIN="$TEST_DIR/installed-bin"
 LINKED_LAUNCHER="$INSTALLED_BIN/opencode-container"
+EXPLICIT_TOOL_DIR="$TEST_DIR/explicit-tools"
+OTHER_TOOL_DIR="$TEST_DIR/other-tools"
+TOOL_STAGE_CHECK="$TEST_DIR/tool-stage-check"
+TOOL_SIGNAL_FILE="$TEST_DIR/tool-signal"
+TOOL_ACTIVE_FILE="$TEST_DIR/tool-active"
+TOOL_ACTIVE_PID_FILE="$TEST_DIR/tool-active.pid"
+TOOL_STDIN_CHECK_FILE="$TEST_DIR/tool-stdin-check"
 DOCKER_RUN_ID="aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
 SBX_LOG="$TEST_DIR/sbx-log"
 SBX_STATE="$TEST_DIR/sbx-state"
-mkdir -p "$FAKE_BIN" "$WORKSPACE" "$TEST_HOME" "$INSTALLED_BIN"
+mkdir -p "$FAKE_BIN" "$WORKSPACE" "$TEST_HOME" "$INSTALLED_BIN" "$EXPLICIT_TOOL_DIR" "$OTHER_TOOL_DIR"
 ln -s "$LAUNCHER" "$LINKED_LAUNCHER"
+
+printf '#!/bin/sh\necho bare\n' > "$FAKE_BIN/bare-tool"
+chmod 755 "$FAKE_BIN/bare-tool"
+printf '#!/bin/sh\necho explicit\n' > "$EXPLICIT_TOOL_DIR/path-tool"
+chmod 4751 "$EXPLICIT_TOOL_DIR/path-tool"
+printf '#!/bin/sh\necho duplicate\n' > "$OTHER_TOOL_DIR/bare-tool"
+chmod 755 "$OTHER_TOOL_DIR/bare-tool"
 
 cat > "$FAKE_BIN/docker" <<'EOF'
 #!/usr/bin/env bash
@@ -110,7 +124,7 @@ set -euo pipefail
 printf '%s\n' "$*" >> "$DOCKER_EVENTS"
 case "${1:-}" in
     --version)
-        printf 'Docker version 28.0.0, build test\n'
+        printf '%s\n' "${DOCKER_VERSION:-Docker version 28.0.0, build test}"
         ;;
     version)
         [[ "${2:-}" == "--format" ]] || exit 1
@@ -235,6 +249,51 @@ case "${1:-}" in
         ;;
     run)
         printf '%s\n' "$@" > "$DOCKER_LOG"
+        if [[ -n "${DOCKER_TOOL_STDIN_CHECK_FILE:-}" ]]; then
+            stdin_line=""
+            if ! IFS= read -r stdin_line || [[ "$stdin_line" != "$DOCKER_TOOL_STDIN_EXPECTED" ]]; then
+                exit 1
+            fi
+            printf '%s\n' "$stdin_line" > "$DOCKER_TOOL_STDIN_CHECK_FILE"
+        fi
+        if [[ -n "${DOCKER_TOOL_STAGE_CHECK_FILE:-}" ]]; then
+            tool_stage=""
+            for ((index = 1; index <= $#; index++)); do
+                if [[ "${!index}" == "--volume" ]]; then
+                    next=$((index + 1))
+                    mount_spec="${!next}"
+                    case "$mount_spec" in
+                        *:/opt/opencode-tools:*)
+                            tool_stage="${mount_spec%:/opt/opencode-tools:*}"
+                            ;;
+                    esac
+                fi
+            done
+            [[ -n "$tool_stage" ]] || exit 1
+            {
+                printf 'stage=%s\n' "$tool_stage"
+                printf 'bare='; cat "$tool_stage/bare-tool"
+                printf 'explicit='; cat "$tool_stage/path-tool"
+                printf 'bare-mode=%s\n' "$(stat -c '%a' "$tool_stage/bare-tool")"
+                printf 'explicit-mode=%s\n' "$(stat -c '%a' "$tool_stage/path-tool")"
+            } > "$DOCKER_TOOL_STAGE_CHECK_FILE"
+        fi
+        if [[ -n "${DOCKER_TOOL_ACTIVE_FILE:-}" ]]; then
+            printf '%s\n' "$$" > "${DOCKER_TOOL_ACTIVE_PID_FILE:-$DOCKER_TOOL_ACTIVE_FILE.pid}"
+            : > "$DOCKER_TOOL_ACTIVE_FILE"
+            trap 'printf "%s\n" "$DOCKER_TOOL_SIGNAL_VALUE" > "$DOCKER_TOOL_SIGNAL_FILE"; exit 143' TERM INT HUP
+            /bin/sleep 5
+            exit 99
+        fi
+        if [[ -n "${DOCKER_TOOL_RUN_EXIT:-}" ]]; then
+            exit "$DOCKER_TOOL_RUN_EXIT"
+        fi
+        if [[ -n "${DOCKER_TOOL_SIGNAL_LAUNCHER:-}" ]]; then
+            trap 'printf "%s\n" "$DOCKER_TOOL_SIGNAL_LAUNCHER" > "$DOCKER_TOOL_SIGNAL_FILE"; exit 143' TERM INT HUP
+            kill -s "$DOCKER_TOOL_SIGNAL_LAUNCHER" "$PPID"
+            /bin/sleep 5
+            exit 99
+        fi
         container_name=""
         container_ownership=""
         launch_token=""
@@ -408,6 +467,12 @@ run_launcher_from_with() {
             SBX_STATE="$SBX_STATE" \
             CHMOD_SIGNAL="${CHMOD_SIGNAL:-}" \
             SLEEP_SIGNAL="${SLEEP_SIGNAL:-}" \
+            DOCKER_TOOL_STAGE_CHECK_FILE="${DOCKER_TOOL_STAGE_CHECK_FILE:-}" \
+            DOCKER_TOOL_RUN_EXIT="${DOCKER_TOOL_RUN_EXIT:-}" \
+            DOCKER_TOOL_SIGNAL_LAUNCHER="${DOCKER_TOOL_SIGNAL_LAUNCHER:-}" \
+            DOCKER_TOOL_SIGNAL_FILE="${DOCKER_TOOL_SIGNAL_FILE:-}" \
+            DOCKER_TOOL_STDIN_CHECK_FILE="${DOCKER_TOOL_STDIN_CHECK_FILE:-}" \
+            DOCKER_TOOL_STDIN_EXPECTED="${DOCKER_TOOL_STDIN_EXPECTED:-}" \
             HOME="$TEST_HOME" \
             OPENCODE_CONTAINER_HOME="$CONTAINER_HOME" \
             "$launcher" "$@"
@@ -465,6 +530,178 @@ reset_docker_artifacts
 run_launcher_with "$V2_CONTAINER_LAUNCHER" --server http://host.containers.internal:4096 > "$OUTPUT"
 mapfile -t docker_args < "$DOCKER_LOG"
 assert_command_tail opencode2 --server http://host.containers.internal:4096
+
+reset_docker_artifacts
+rm -f "$TOOL_STAGE_CHECK"
+DOCKER_TOOL_STAGE_CHECK_FILE="$TOOL_STAGE_CHECK" run_launcher --with-tool bare-tool --with-tool "$EXPLICIT_TOOL_DIR/path-tool" -- bash > "$OUTPUT"
+mapfile -t docker_args < "$DOCKER_LOG"
+tool_stage_mount=""
+for ((index = 0; index + 1 < ${#docker_args[@]}; index++)); do
+    if [[ "${docker_args[index]}" == "--volume" && "${docker_args[index + 1]}" == *:/opt/opencode-tools:* ]]; then
+        tool_stage_mount="${docker_args[index + 1]}"
+        break
+    fi
+done
+[[ -n "$tool_stage_mount" ]] || fail "selected tools must use a dedicated mount"
+tool_stage="${tool_stage_mount%:/opt/opencode-tools:*}"
+assert_arg_pair --volume "$tool_stage:/opt/opencode-tools:ro"
+assert_arg_pair --env PATH=/opt/opencode-tools:/usr/local/cargo/bin:/usr/local/bin:/usr/local/sbin:/usr/sbin:/usr/bin:/sbin:/bin
+assert_command_tail opencode-containment:latest bash
+assert_line "stage=$tool_stage" "$TOOL_STAGE_CHECK"
+assert_line "bare=#!/bin/sh" "$TOOL_STAGE_CHECK"
+assert_line "echo bare" "$TOOL_STAGE_CHECK"
+assert_line "explicit=#!/bin/sh" "$TOOL_STAGE_CHECK"
+assert_line "echo explicit" "$TOOL_STAGE_CHECK"
+assert_line "bare-mode=555" "$TOOL_STAGE_CHECK"
+assert_line "explicit-mode=555" "$TOOL_STAGE_CHECK"
+[[ ! -e "$tool_stage" ]] || fail "tool staging directory must be removed after launch"
+
+reset_docker_artifacts
+DOCKER_VERSION='podman version 5.8.4' run_launcher --with-tool bare-tool -- bash > "$OUTPUT"
+mapfile -t docker_args < "$DOCKER_LOG"
+podman_tool_stage_mount=""
+for ((index = 0; index + 1 < ${#docker_args[@]}; index++)); do
+    if [[ "${docker_args[index]}" == "--volume" && "${docker_args[index + 1]}" == *:/opt/opencode-tools:* ]]; then
+        podman_tool_stage_mount="${docker_args[index + 1]}"
+        break
+    fi
+done
+[[ -n "$podman_tool_stage_mount" ]] || fail "Podman selected tools must use a dedicated mount"
+podman_tool_stage="${podman_tool_stage_mount%:/opt/opencode-tools:*}"
+assert_arg_pair --volume "$podman_tool_stage:/opt/opencode-tools:ro,Z"
+assert_arg_pair --userns keep-id
+[[ ! -e "$podman_tool_stage" ]] || fail "Podman tool staging directory must be removed after launch"
+
+reset_docker_artifacts
+run_launcher -- --with-tool bare-tool > "$OUTPUT"
+mapfile -t docker_args < "$DOCKER_LOG"
+assert_command_tail opencode-containment:latest --with-tool bare-tool
+
+reset_docker_artifacts
+rm -f "$TOOL_STDIN_CHECK_FILE"
+set +e
+printf '%s\n' 'tool-stdin-sentinel' | \
+    DOCKER_TOOL_STDIN_CHECK_FILE="$TOOL_STDIN_CHECK_FILE" \
+    DOCKER_TOOL_STDIN_EXPECTED='tool-stdin-sentinel' \
+    run_launcher --with-tool bare-tool -- bash > "$OUTPUT" 2>&1
+pipeline_status=${PIPESTATUS[1]}
+set -e
+[[ "$pipeline_status" == "0" ]] || fail "tool launch must preserve piped stdin"
+assert_line 'tool-stdin-sentinel' "$TOOL_STDIN_CHECK_FILE"
+
+reset_docker_artifacts
+set +e
+DOCKER_TOOL_RUN_EXIT=37 run_launcher --with-tool bare-tool -- bash > "$OUTPUT" 2>&1
+launcher_status=$?
+set -e
+[[ "$launcher_status" == "37" ]] || fail "tool launch must preserve Docker exit status"
+
+reset_docker_artifacts
+set +e
+CHMOD_SIGNAL=TERM run_launcher --with-tool bare-tool -- bash > "$OUTPUT" 2>&1
+launcher_status=$?
+set -e
+((launcher_status != 0)) || fail "signal during tool staging should fail"
+shopt -s nullglob
+remaining_tool_stages=("$CONTAINER_HOME"/.opencode-tools.*)
+(( ${#remaining_tool_stages[@]} == 0 )) || fail "signal during tool staging must clean up"
+shopt -u nullglob
+
+reset_docker_artifacts
+rm -f "$TOOL_SIGNAL_FILE"
+set +e
+DOCKER_TOOL_SIGNAL_LAUNCHER=TERM DOCKER_TOOL_SIGNAL_FILE="$TOOL_SIGNAL_FILE" run_launcher --with-tool bare-tool -- bash > "$OUTPUT" 2>&1
+launcher_status=$?
+set -e
+[[ "$launcher_status" == "143" ]] || fail "signal during docker run should preserve forwarded signal status"
+assert_line TERM "$TOOL_SIGNAL_FILE"
+shopt -s nullglob
+remaining_tool_stages=("$CONTAINER_HOME"/.opencode-tools.*)
+(( ${#remaining_tool_stages[@]} == 0 )) || fail "signal during docker run must clean up"
+shopt -u nullglob
+
+reset_docker_artifacts
+rm -f "$TOOL_ACTIVE_FILE" "$TOOL_ACTIVE_PID_FILE" "$TOOL_SIGNAL_FILE"
+(
+    cd "$WORKSPACE"
+    PATH="$FAKE_BIN:$PATH" \
+        DOCKER_LOG="$DOCKER_LOG" \
+        DOCKER_EVENTS="$DOCKER_EVENTS" \
+        DOCKER_RUN_ID="$DOCKER_RUN_ID" \
+        DOCKER_TOOL_ACTIVE_FILE="$TOOL_ACTIVE_FILE" \
+        DOCKER_TOOL_ACTIVE_PID_FILE="$TOOL_ACTIVE_PID_FILE" \
+        DOCKER_TOOL_SIGNAL_VALUE=TERM \
+        DOCKER_TOOL_SIGNAL_FILE="$TOOL_SIGNAL_FILE" \
+        HOME="$TEST_HOME" \
+        OPENCODE_CONTAINER_HOME="$CONTAINER_HOME" \
+        exec "$LAUNCHER" --with-tool bare-tool -- bash
+) &
+tool_launcher_pid=$!
+index=0
+while ((index < 50)) && [[ ! -e "$TOOL_ACTIVE_FILE" ]]; do
+    /bin/sleep 0.1
+    index=$((index + 1))
+done
+[[ -e "$TOOL_ACTIVE_FILE" ]] || fail "fake Docker did not become active for signal test"
+kill -TERM "$tool_launcher_pid"
+set +e
+wait "$tool_launcher_pid"
+launcher_status=$?
+set -e
+[[ "$launcher_status" == "143" ]] || fail "TERM during active Docker run should be forwarded"
+assert_line TERM "$TOOL_SIGNAL_FILE"
+shopt -s nullglob
+remaining_tool_stages=("$CONTAINER_HOME"/.opencode-tools.*)
+(( ${#remaining_tool_stages[@]} == 0 )) || fail "forwarded signal must clean up tool staging"
+shopt -u nullglob
+
+reset_docker_artifacts
+if run_launcher --with-tool bare-tool --with-tool "$OTHER_TOOL_DIR/bare-tool" -- bash > "$OUTPUT" 2>&1; then
+    fail "duplicate tool basenames should fail"
+fi
+[[ ! -e "$DOCKER_LOG" ]] || fail "Docker must not run for duplicate tool basenames"
+assert_line "Error: --with-tool '$OTHER_TOOL_DIR/bare-tool' duplicates destination basename 'bare-tool'." "$OUTPUT"
+
+reset_docker_artifacts
+if run_launcher --with-tool missing-tool -- bash > "$OUTPUT" 2>&1; then
+    fail "missing tools should fail"
+fi
+[[ ! -e "$DOCKER_LOG" ]] || fail "Docker must not run for missing tools"
+assert_line "Error: --with-tool 'missing-tool' could not be resolved to a regular executable file." "$OUTPUT"
+
+chmod 644 "$EXPLICIT_TOOL_DIR/path-tool"
+reset_docker_artifacts
+if run_launcher --with-tool "$EXPLICIT_TOOL_DIR/path-tool" -- bash > "$OUTPUT" 2>&1; then
+    fail "non-executable tools should fail"
+fi
+[[ ! -e "$DOCKER_LOG" ]] || fail "Docker must not run for non-executable tools"
+assert_line "Error: --with-tool '$EXPLICIT_TOOL_DIR/path-tool' could not be resolved to a regular executable file." "$OUTPUT"
+chmod 4751 "$EXPLICIT_TOOL_DIR/path-tool"
+
+reset_docker_artifacts
+if run_launcher --with-tool cd -- bash > "$OUTPUT" 2>&1; then
+    fail "shell builtins should fail"
+fi
+[[ ! -e "$DOCKER_LOG" ]] || fail "Docker must not run for shell builtins"
+assert_line "Error: --with-tool 'cd' is a shell builtin, function, alias, or keyword; select an external executable instead." "$OUTPUT"
+
+reset_docker_artifacts
+if run_launcher --with-tool bare-tool --web-server --web-port 4700 > "$OUTPUT" 2>&1; then
+    fail "web-server plus --with-tool should fail"
+fi
+[[ ! -e "$DOCKER_LOG" ]] || fail "Docker must not run for web-server plus --with-tool"
+assert_line "Error: --web-server cannot be combined with --with-tool." "$OUTPUT"
+
+reset_docker_artifacts
+rm -f "$TOOL_STAGE_CHECK"
+DOCKER_TOOL_STAGE_CHECK_FILE="$TOOL_STAGE_CHECK" run_launcher_with "$V2_CONTAINER_LAUNCHER" --with-tool bare-tool --with-tool "$EXPLICIT_TOOL_DIR/path-tool" -- bash > "$OUTPUT"
+mapfile -t docker_args < "$DOCKER_LOG"
+assert_arg_pair --env PATH=/opt/opencode-tools:/usr/local/cargo/bin:/usr/local/bin:/usr/local/sbin:/usr/sbin:/usr/bin:/sbin:/bin
+assert_command_tail opencode-containment:latest bash
+assert_line "bare=#!/bin/sh" "$TOOL_STAGE_CHECK"
+assert_line "echo bare" "$TOOL_STAGE_CHECK"
+assert_line "explicit=#!/bin/sh" "$TOOL_STAGE_CHECK"
+assert_line "echo explicit" "$TOOL_STAGE_CHECK"
 
 reset_docker_artifacts
 run_launcher_with "$LINKED_LAUNCHER" --web-server --web-port 4701 > "$OUTPUT"
