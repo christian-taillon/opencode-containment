@@ -1,52 +1,117 @@
-# AI Coding CLI Containment Cheat Sheet
+# AI Coding Agent Containment: Quick Start
 
-Docker-first, copy/paste containment for **Claude Code**, **OpenAI Codex CLI**, **OpenCode**, and **Cursor CLI**.
+A small cheat sheet for running **Claude Code**, **OpenAI Codex**, **OpenCode**, or **Cursor CLI** with a clearer boundary around the agent.
 
-This is intentionally simpler than the full `opencode-containment` launcher. The goal is to answer one question quickly:
+If you only remember one rule:
 
-> How do I run an AI coding CLI against only the current project, keep its login/config persistent, and make network access explicit?
+> Share the project, not your machine.
 
-Verified against current vendor documentation on 2026-09-07.
+This guide intentionally stays simple. For a more mature and opinionated OpenCode setup with hardened container defaults, isolated state, workspace guardrails, Docker Sandboxes support, and helper launchers, see the main [`opencode-containment`](../README.md) project.
 
-## The basic containment model
+For the differences between each harness's built-in sandboxing on macOS, Linux, Windows, and WSL2, see [`native-isolation.md`](native-isolation.md).
 
-Keep the boundary small:
+Verified against current vendor documentation on **2026-09-07**.
 
-- Current directory only -> mounted read-write at `/workspace`.
-- CLI state only -> persisted under a private host state directory.
-- Do **not** mount `$HOME`, `/`, private SSH keys, `.env` collections, or the Docker socket.
-- Docker's normal bridge network -> outbound Internet available.
-- `--network none` -> no network at all.
-- The workspace remains writable, so the agent can still modify or delete project files.
+## Pick a boundary
 
-Docker is useful containment, but it is not a VM. The container still shares the host kernel.
-
-## Client OS
-
-These examples use a POSIX shell and are intended for:
-
-| Client OS | Recommended path | Notes |
+| Approach | Best for | Isolation |
 |---|---|---|
-| Linux | Docker Engine + Bash/Zsh | Native path. On SELinux hosts, add `:Z` to bind mounts. |
-| macOS | Docker Desktop/OrbStack + Bash/Zsh | Works with normal `$PWD` bind mounts if the directory is shared with Docker. |
-| Windows | WSL2 + Docker Desktop | Recommended for this sheet. Run the Linux commands from WSL. |
-| Windows native PowerShell | Not covered yet | Path quoting, UID handling, and TTY syntax differ. |
+| **Docker Sandboxes (`sbx`)** | Easiest cross-agent containment | Stronger: each sandbox is a microVM with its own Linux kernel |
+| **Docker container** | Portable, familiar, easy to customize | Good process/filesystem boundary, but shares the host kernel |
+| **Harness-native sandbox** | Lowest friction when the harness supports it well | Varies substantially by harness and operating system |
 
-The container itself is Linux even when the client is macOS or Windows.
+For unfamiliar repositories or highly autonomous agents, prefer **Docker Sandboxes**, especially `--clone` mode.
 
-## Network switch
+---
 
-### Internet available
+# 1. Docker Sandboxes: simplest path
 
-Use Docker's default network. No extra network flag is required:
+Docker Sandboxes has built-in templates for all four agents.
+
+From the project directory:
 
 ```bash
-docker run ...
+sbx run claude
+sbx run codex
+sbx run cursor
+sbx run opencode
 ```
 
-This allows normal provider API calls, package installation, Git fetches, web requests, and arbitrary outbound traffic permitted by the host/network.
+That is the basic containment cheat sheet.
 
-### No network
+The current directory is the workspace. The rest of the agent environment runs in an isolated microVM.
+
+## Keep the host checkout untouched
+
+Normal `sbx run` shares the working tree read-write, so agent edits appear immediately on the host.
+
+For a Git repository, use **clone mode** when you do not want the agent writing directly to the host checkout:
+
+```bash
+sbx run --clone claude
+sbx run --clone codex
+sbx run --clone cursor
+sbx run --clone opencode
+```
+
+In clone mode the host repository is exposed read-only and the agent works in a private clone inside the sandbox. Fetch or push the changes you want to keep.
+
+## Authentication
+
+`sbx` supports host-managed credentials and provider-specific login flows. For example:
+
+```bash
+sbx secret set openai --oauth
+sbx secret set anthropic
+sbx secret set cursor
+```
+
+Some agents can also perform interactive OAuth on first launch. Prefer the `sbx` credential flow over mounting your normal home directory into the sandbox.
+
+## What Docker Sandboxes isolates
+
+Each sandbox has its own:
+
+- Linux kernel
+- process space
+- filesystem outside explicitly shared workspaces
+- network
+- Docker daemon
+- persistent sandbox state
+
+Provider credentials can be injected by the host-side credential proxy instead of being copied into the VM.
+
+The default direct workspace mount is still read-write. **The microVM protects the rest of the host; it does not protect files you deliberately share read-write.** Use `--clone` when that distinction matters.
+
+## Client OS requirements
+
+Docker Sandboxes is a separate `sbx` product. Docker Desktop or Docker Engine is not required just to use `sbx`.
+
+| Client OS | Current documented baseline |
+|---|---|
+| macOS | macOS 14+ on Apple silicon |
+| Windows | Windows 11 x64 with Windows Hypervisor Platform |
+| Linux | Ubuntu 24.04+ x64/arm64 with KVM enabled and user access to `/dev/kvm` |
+| WSL | Run `sbx` from the supported host OS rather than treating WSL itself as the sandbox boundary |
+
+Install instructions: <https://docs.docker.com/ai/sandboxes/install/>
+
+---
+
+# 2. Ordinary Docker: simple and portable
+
+If you already have an image containing the agent CLI, the containment pattern is the same for every harness:
+
+```bash
+docker run --rm -it \
+  -v "$PWD:/workspace" \
+  -w /workspace \
+  AGENT_IMAGE
+```
+
+Only the current project is deliberately shared.
+
+## No network
 
 Add:
 
@@ -57,294 +122,163 @@ Add:
 Example:
 
 ```bash
-docker run --network none ...
-```
-
-Important: a cloud coding agent cannot call its model provider with `--network none`. This mode is mainly useful for offline inspection, testing the containment boundary, or a CLI/model that is already available inside the same container.
-
-## Common state directory
-
-The examples below keep container-only credentials and config under:
-
-```bash
-${XDG_DATA_HOME:-$HOME/.local/share}/ai-cli-containment/
-```
-
-That avoids sharing the host CLI's normal credential store with the container.
-
-Treat these directories as secrets. They can contain refresh tokens and provider credentials.
-
----
-
-## OpenCode
-
-OpenCode publishes an official image:
-
-```text
-ghcr.io/anomalyco/opencode
-```
-
-OpenCode stores global config under `~/.config/opencode` and provider credentials under `~/.local/share/opencode/auth.json`. The command below relocates those XDG paths into isolated persistent state.
-
-### Run with Internet
-
-```bash
-STATE="${XDG_DATA_HOME:-$HOME/.local/share}/ai-cli-containment/opencode"; \
-mkdir -p "$STATE" && chmod 700 "$STATE" && \
 docker run --rm -it \
-  --user "$(id -u):$(id -g)" \
-  -e HOME=/state/home \
-  -e XDG_CONFIG_HOME=/state/config \
-  -e XDG_DATA_HOME=/state/data \
-  -e XDG_CACHE_HOME=/state/cache \
-  -v "$STATE:/state" \
+  --network none \
+  -v "$PWD:/workspace" \
+  -w /workspace \
+  AGENT_IMAGE
+```
+
+This blocks the model provider too. A cloud-backed agent normally cannot function in this mode unless its model/API is reachable through some other intentionally provided path.
+
+## Persist login and config
+
+Do **not** solve persistence by mounting `$HOME`.
+
+Instead, persist only the agent's own state directory, either with a Docker volume or a narrow private bind mount:
+
+```bash
+docker volume create agent-state
+
+docker run --rm -it \
+  -v "$PWD:/workspace" \
+  -v agent-state:/home/agent-state \
+  -w /workspace \
+  AGENT_IMAGE
+```
+
+The exact config/auth path differs by harness. Keep it narrow and treat it as secret-bearing state.
+
+## OpenCode has an official image
+
+OpenCode publishes `ghcr.io/anomalyco/opencode`, so the minimal container form is:
+
+```bash
+docker run --rm -it \
   -v "$PWD:/workspace" \
   -w /workspace \
   ghcr.io/anomalyco/opencode
 ```
 
-Log in once inside the contained environment:
+For persistent OpenCode auth/config, mount only its XDG config/data directories rather than the entire host home directory. The full `opencode-containment` launcher in this repository already handles this more carefully.
 
-```bash
-opencode auth login
+## Claude, Codex, and Cursor images
+
+For ordinary Docker, use an image containing the CLI you want to run:
+
+- Claude Code: Anthropic documents dev-container/container workflows and a native installer.
+- Codex: install `@openai/codex` in a small development image or use your existing agent image.
+- Cursor: install Cursor CLI in a development image or use Docker Sandboxes' built-in Cursor template.
+
+The important containment controls are the same regardless of installer:
+
+```text
+project -> explicit RW mount
+agent state -> explicit private persistent mount
+host home -> not mounted
+Docker socket -> not mounted
+network -> explicit choice
 ```
 
-The login persists in `$STATE` across disposable containers.
-
-### No network
-
-Use the same command and add:
-
-```bash
---network none
-```
+Avoid clever `docker run` one-liners that download and reinstall an agent on every launch. A tiny reusable image is simpler to audit and faster to use.
 
 ---
 
-## Claude Code
+# 3. What not to mount
 
-Anthropic documents npm installation for Claude Code, so a stock Node Linux image is enough for a minimal disposable container. The CLI installation itself is cached in the same isolated state directory after the first run.
+For a normal coding task, avoid exposing:
 
-Claude Code supports `CLAUDE_CONFIG_DIR`; on Linux its credential file normally lives under the Claude config directory.
-
-### Run with Internet
-
-```bash
-STATE="${XDG_DATA_HOME:-$HOME/.local/share}/ai-cli-containment/claude"; \
-mkdir -p "$STATE" && chmod 700 "$STATE" && \
-docker run --rm -it \
-  --user "$(id -u):$(id -g)" \
-  -e HOME=/state/home \
-  -e CLAUDE_CONFIG_DIR=/state/claude \
-  -e NPM_CONFIG_PREFIX=/state/npm \
-  -e PATH=/state/npm/bin:/usr/local/bin:/usr/bin:/bin \
-  -v "$STATE:/state" \
-  -v "$PWD:/workspace" \
-  -w /workspace \
-  node:22-bookworm \
-  sh -lc 'command -v claude >/dev/null 2>&1 || npm install -g @anthropic-ai/claude-code; exec claude'
+```text
+/
+$HOME
+~/.ssh
+~/.aws
+~/.kube
+~/.config wholesale
+/var/run/docker.sock
+large secrets directories
 ```
 
-The first launch installs Claude Code into persistent container state. Later launches reuse it.
+If the project itself contains credentials, `.env` files, private keys, or kubeconfigs, the agent can still see them because the project is intentionally shared.
 
-Authenticate inside the container:
-
-```bash
-claude auth login
-```
-
-Container/browser flows may give you a URL or code to open on the host browser and paste back into the terminal.
-
-### No network
-
-After the CLI has been installed at least once, add:
-
-```bash
---network none
-```
-
-Claude Code still cannot reach Anthropic while networking is disabled.
+A container cannot protect a secret that you mount into the container.
 
 ---
 
-## OpenAI Codex CLI
+# 4. Optional Docker hardening
 
-Codex can be installed from npm as `@openai/codex`.
-
-Codex state is controlled by `CODEX_HOME`, which defaults to `~/.codex`. Authentication may use a system credential store or `CODEX_HOME/auth.json`. For a container, file-backed auth is the simplest persistent model.
-
-### Run with Internet
+These are reasonable additions when the client still works with them:
 
 ```bash
-STATE="${XDG_DATA_HOME:-$HOME/.local/share}/ai-cli-containment/codex"; \
-mkdir -p "$STATE/codex" && chmod 700 "$STATE" && \
-printf '%s\n' 'cli_auth_credentials_store = "file"' > "$STATE/codex/config.toml" && \
-docker run --rm -it \
-  --user "$(id -u):$(id -g)" \
-  -e HOME=/state/home \
-  -e CODEX_HOME=/state/codex \
-  -e NPM_CONFIG_PREFIX=/state/npm \
-  -e PATH=/state/npm/bin:/usr/local/bin:/usr/bin:/bin \
-  -v "$STATE:/state" \
-  -v "$PWD:/workspace" \
-  -w /workspace \
-  node:22-bookworm \
-  sh -lc 'command -v codex >/dev/null 2>&1 || npm install -g @openai/codex; exec codex'
-```
-
-Authenticate once:
-
-```bash
-codex login
-```
-
-The login and Codex config remain under `$STATE/codex`.
-
-> If you already maintain a Codex `config.toml`, do not overwrite it with the `printf` line above. Add `cli_auth_credentials_store = "file"` to your existing container-specific config instead.
-
-### No network
-
-After the CLI has been installed at least once, add:
-
-```bash
---network none
-```
-
-Codex still cannot reach OpenAI while networking is disabled.
-
----
-
-## Cursor CLI
-
-Cursor documents the Linux/WSL installer:
-
-```bash
-curl https://cursor.com/install -fsS | bash
-```
-
-The CLI command is currently `agent`; `cursor-agent` may also be present as an explicit alias. Cursor global CLI config can be relocated with `CURSOR_CONFIG_DIR`.
-
-For browser-auth persistence, this example persists the container's private home rather than mounting the host Cursor state.
-
-### Run with Internet
-
-```bash
-STATE="${XDG_DATA_HOME:-$HOME/.local/share}/ai-cli-containment/cursor"; \
-mkdir -p "$STATE/home" && chmod 700 "$STATE" && \
-docker run --rm -it \
-  --user "$(id -u):$(id -g)" \
-  -e HOME=/state/home \
-  -e CURSOR_CONFIG_DIR=/state/home/.cursor \
-  -e PATH=/state/home/.local/bin:/usr/local/bin:/usr/bin:/bin \
-  -v "$STATE:/state" \
-  -v "$PWD:/workspace" \
-  -w /workspace \
-  node:22-bookworm \
-  sh -lc 'command -v agent >/dev/null 2>&1 || curl https://cursor.com/install -fsS | bash; exec agent'
-```
-
-Authenticate once:
-
-```bash
-agent login
-```
-
-Check persistence with:
-
-```bash
-agent status
-```
-
-For automation, Cursor also supports `CURSOR_API_KEY`, which can be preferable to browser-auth state. Do not bake API keys into an image.
-
-### No network
-
-After the CLI has been installed at least once, add:
-
-```bash
---network none
-```
-
-Cursor cannot reach its model service while networking is disabled.
-
----
-
-## SELinux hosts: Fedora, RHEL, etc.
-
-If Docker/Podman is blocked from reading the bind-mounted project or state directory, add an SELinux relabel option to each bind mount.
-
-Example:
-
-```bash
--v "$STATE:/state:Z" \
--v "$PWD:/workspace:Z"
-```
-
-Do not mechanically use `:Z` for shared directories that multiple unrelated containers need simultaneously; understand the relabel behavior first.
-
-## What the agent can and cannot see
-
-With the minimal pattern above:
-
-| Resource | Visible to agent? |
-|---|---:|
-| Current project directory | Yes, read-write |
-| CLI-specific persistent state | Yes |
-| Rest of `$HOME` | No |
-| `~/.ssh/id_*` private keys | No |
-| Host `.env` files outside project | No |
-| Docker socket | No |
-| Host root filesystem | No |
-| Internet | Yes by default; no with `--network none` |
-
-Anything inside the current project is intentionally exposed. If the repository itself contains `.env`, secrets, kubeconfig files, private keys, or other credentials, Docker cannot protect those from the agent because they are inside the mounted workspace.
-
-## Useful optional limits
-
-For untrusted or highly autonomous work, consider adding resource limits:
-
-```bash
+--security-opt no-new-privileges:true \
+--cap-drop=ALL \
 --memory 8g \
 --cpus 4 \
---pids-limit 512 \
---security-opt no-new-privileges:true
+--pids-limit 512
 ```
 
-Do not blindly add aggressive capability/seccomp restrictions to every coding CLI. Some CLIs implement their own Linux sandboxing and namespace controls, and an outer Docker restriction can break the inner sandbox. Test hardening per client.
+A read-only root filesystem and explicit tmpfs mounts can reduce the writable surface further.
 
-## Minimum safety checklist
+Do not blindly stack every restriction on top of every harness. Claude, Codex, and Cursor can use their own Linux namespace/sandbox mechanisms, and an outer container can prevent an inner sandbox from creating the namespaces it expects. In that situation, decide which layer is actually your security boundary instead of weakening both accidentally.
 
-Before launching an agent against an unfamiliar repository:
+---
 
-1. `git status` and commit/stash anything you care about.
-2. Confirm the bind mount is only the intended project directory.
-3. Confirm no host `$HOME`, Docker socket, SSH key directory, or broad secrets directory is mounted.
-4. Decide whether the task actually needs Internet access.
-5. Remember that persistent CLI state contains credentials even though the rest of the host is hidden.
-6. Review `git diff` before accepting the agent's work.
+# 5. Containment is not the same as approvals
 
-## Docker Sandboxes: next layer
+Three different controls are often mixed together:
 
-This sheet starts with ordinary Docker because it is widely available and easy to understand.
+| Control | Question it answers |
+|---|---|
+| Agent permissions / approvals | "Should the harness let the model try this action?" |
+| Native sandbox | "What can the resulting process actually reach on this OS?" |
+| Container / microVM | "What part of the host exists inside the agent's execution environment at all?" |
 
-The next version should add the equivalent **Docker Sandboxes (`sbx`)** recipes. Docker Sandboxes can provide a stronger microVM boundary while keeping the same basic model:
+Permission prompts are useful, but they are not a replacement for an OS-enforced boundary.
 
-- project directory -> explicit workspace
-- provider credentials -> isolated/persistent agent state
-- network -> explicit allowlist or deny policy
-- client OS -> Linux/macOS/Windows support called out separately
+This difference is particularly important for OpenCode: its permissions can allow, ask, or deny tools, but current V2 documentation explicitly notes that shell commands execute with the host user's filesystem, process, and network authority. Use external containment when you need an actual runtime boundary.
 
-This repository already contains an OpenCode-specific Docker Sandboxes backend in `bin/opencode-sandbox`; the cross-client sheet should build on that pattern rather than duplicate it.
+See [`native-isolation.md`](native-isolation.md) for the harness-by-harness details.
 
-## Vendor references
+---
 
-- OpenCode Docker/install: https://opencode.ai/docs
-- OpenCode CLI auth: https://dev.opencode.ai/docs/cli
-- Claude Code installation: https://code.claude.com/docs/en/installation
-- Claude Code authentication: https://code.claude.com/docs/en/authentication
-- Claude Code dev containers: https://code.claude.com/docs/en/devcontainer
-- Codex CLI: https://developers.openai.com/codex/cli
-- Codex repository: https://github.com/openai/codex
-- Cursor CLI installation: https://cursor.com/docs/cli/installation
-- Cursor CLI configuration: https://cursor.com/docs/cli/reference/configuration
-- Cursor CLI authentication: https://cursor.com/docs/cli/reference/authentication
+# 6. Which option should I use?
+
+### I just want a safe, simple default
+
+```bash
+sbx run --clone AGENT
+```
+
+Replace `AGENT` with `claude`, `codex`, `cursor`, or `opencode`.
+
+### I want edits to appear immediately in my working tree
+
+```bash
+sbx run AGENT
+```
+
+### I already live in Docker
+
+Use a normal container and expose only the project plus narrow persistent agent state.
+
+### I use OpenCode heavily and want a tuned daily environment
+
+Use this repository's `opencode-container` or `opencode-sandbox` launchers. They add the opinionated pieces intentionally omitted from this cheat sheet: workspace guardrails, isolated state/auth handling, host integration choices, hardening, profiles, and Docker Sandboxes support.
+
+### I want no external runtime at all
+
+Check the harness's native sandbox support first: [`native-isolation.md`](native-isolation.md).
+
+---
+
+# Vendor references
+
+- Docker Sandboxes: <https://docs.docker.com/ai/sandboxes/>
+- Docker Sandboxes usage and clone mode: <https://docs.docker.com/ai/sandboxes/usage/>
+- Docker Sandboxes agents: <https://docs.docker.com/reference/cli/sbx/run/>
+- Claude Code sandboxing: <https://code.claude.com/docs/en/sandboxing>
+- Codex sandboxing: <https://developers.openai.com/codex/security>
+- OpenCode permissions: <https://opencode.ai/v2/docs/permissions>
+- OpenCode installation / Docker image: <https://opencode.ai/docs/>
+- Cursor run modes: <https://cursor.com/docs/agent/security/run-modes>
+- Cursor sandbox configuration: <https://cursor.com/docs/reference/sandbox>
