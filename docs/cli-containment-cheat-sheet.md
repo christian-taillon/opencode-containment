@@ -1,34 +1,29 @@
-# AI Coding Agent Containment: Quick Start
+# Containing AI Coding Agents
 
-A small cheat sheet for running **Claude Code**, **OpenAI Codex**, **OpenCode**, or **Cursor CLI** with a clearer boundary around the agent.
+A practical guide to running **Claude Code**, **OpenAI Codex**, **OpenCode**, and **Cursor** with a smaller blast radius.
 
-If you only remember one rule:
+The goal is not to make an agent harmless. The goal is to make the boundary obvious:
 
-> Share the project, not your machine.
+> **Share the project, not your machine.**
 
-This guide intentionally stays simple. For a more mature and opinionated OpenCode setup with hardened container defaults, isolated state, workspace guardrails, Docker Sandboxes support, and helper launchers, see the main [`opencode-containment`](../README.md) project.
+A useful containment setup should answer four questions:
 
-For the differences between each harness's built-in sandboxing on macOS, Linux, Windows, and WSL2, see [`native-isolation.md`](native-isolation.md).
+1. What files can the agent read?
+2. What files can it modify?
+3. What network destinations can it reach?
+4. What credentials or environment variables can its processes see?
 
-Verified against current vendor documentation on **2026-09-07**.
+This guide starts with containers and Docker Sandboxes, then looks at the native isolation built into each harness.
 
-## Pick a boundary
+For a more mature and opinionated OpenCode implementation, see [`christian-taillon/opencode-containment`](https://github.com/christian-taillon/opencode-containment). That project adds persistent state, workspace guardrails, hardened container defaults, Docker Sandboxes support, and helper launchers around the same basic containment model described here.
 
-| Approach | Best for | Isolation |
-|---|---|---|
-| **Docker Sandboxes (`sbx`)** | Easiest cross-agent containment | Stronger: each sandbox is a microVM with its own Linux kernel |
-| **Docker container** | Portable, familiar, easy to customize | Good process/filesystem boundary, but shares the host kernel |
-| **Harness-native sandbox** | Lowest friction when the harness supports it well | Varies substantially by harness and operating system |
-
-For unfamiliar repositories or highly autonomous agents, prefer **Docker Sandboxes**, especially `--clone` mode.
+Verified against current vendor documentation and source on **2026-09-07**.
 
 ---
 
-# 1. Docker Sandboxes: simplest path
+## The 60-second version
 
-Docker Sandboxes has built-in templates for all four agents.
-
-From the project directory:
+If Docker Sandboxes is available on your machine, the simplest common interface is:
 
 ```bash
 sbx run claude
@@ -37,15 +32,7 @@ sbx run cursor
 sbx run opencode
 ```
 
-That is the basic containment cheat sheet.
-
-The current directory is the workspace. The rest of the agent environment runs in an isolated microVM.
-
-## Keep the host checkout untouched
-
-Normal `sbx run` shares the working tree read-write, so agent edits appear immediately on the host.
-
-For a Git repository, use **clone mode** when you do not want the agent writing directly to the host checkout:
+If you do not want the agent editing your host checkout directly, use clone mode:
 
 ```bash
 sbx run --clone claude
@@ -54,53 +41,7 @@ sbx run --clone cursor
 sbx run --clone opencode
 ```
 
-In clone mode the host repository is exposed read-only and the agent works in a private clone inside the sandbox. Fetch or push the changes you want to keep.
-
-## Authentication
-
-`sbx` supports host-managed credentials and provider-specific login flows. For example:
-
-```bash
-sbx secret set openai --oauth
-sbx secret set anthropic
-sbx secret set cursor
-```
-
-Some agents can also perform interactive OAuth on first launch. Prefer the `sbx` credential flow over mounting your normal home directory into the sandbox.
-
-## What Docker Sandboxes isolates
-
-Each sandbox has its own:
-
-- Linux kernel
-- process space
-- filesystem outside explicitly shared workspaces
-- network
-- Docker daemon
-- persistent sandbox state
-
-Provider credentials can be injected by the host-side credential proxy instead of being copied into the VM.
-
-The default direct workspace mount is still read-write. **The microVM protects the rest of the host; it does not protect files you deliberately share read-write.** Use `--clone` when that distinction matters.
-
-## Client OS requirements
-
-Docker Sandboxes is a separate `sbx` product. Docker Desktop or Docker Engine is not required just to use `sbx`.
-
-| Client OS | Current documented baseline |
-|---|---|
-| macOS | macOS 14+ on Apple silicon |
-| Windows | Windows 11 x64 with Windows Hypervisor Platform |
-| Linux | Ubuntu 24.04+ x64/arm64 with KVM enabled and user access to `/dev/kvm` |
-| WSL | Run `sbx` from the supported host OS rather than treating WSL itself as the sandbox boundary |
-
-Install instructions: <https://docs.docker.com/ai/sandboxes/install/>
-
----
-
-# 2. Ordinary Docker: simple and portable
-
-If you already have an image containing the agent CLI, the containment pattern is the same for every harness:
+If you prefer ordinary Docker, the generic pattern is:
 
 ```bash
 docker run --rm -it \
@@ -109,9 +50,133 @@ docker run --rm -it \
   AGENT_IMAGE
 ```
 
-Only the current project is deliberately shared.
+The important part is not the exact command. It is what is **missing** from it: no `$HOME`, no `/`, no SSH key directory, and no Docker socket.
 
-## No network
+<<insert image here: from a disposable Git repository run `sbx run --clone opencode`, then show the sandbox starting and the agent working inside the cloned project>>
+
+---
+
+# 1. Pick the boundary
+
+| Approach | Best for | What it gives you |
+|---|---|---|
+| **Docker Sandboxes (`sbx`)** | Simple cross-agent containment | MicroVM boundary, separate kernel, filesystem, processes, network, and sandbox state |
+| **Docker / Podman** | Familiar and configurable development workflow | Strong filesystem/process separation, but a shared host kernel |
+| **Harness-native sandbox** | Lowest-friction local use | OS-backed restrictions when the harness and platform support them |
+| **Permissions / approvals** | Human control over actions | Policy, not necessarily OS containment |
+
+The most important distinction is between **permission** and **containment**.
+
+A permission system asks:
+
+> Should the model be allowed to try this command?
+
+A sandbox asks:
+
+> If the command runs, what can the resulting process actually reach?
+
+Those are different controls.
+
+---
+
+# 2. Docker Sandboxes: the simplest common approach
+
+Docker Sandboxes supports built-in agent templates for Claude Code, Codex, Cursor, and OpenCode.
+
+From the project directory:
+
+```bash
+sbx run claude
+```
+
+or:
+
+```bash
+sbx run codex
+sbx run cursor
+sbx run opencode
+```
+
+The sandbox runs in a lightweight microVM rather than as another process directly on the host.
+
+## Direct workspace vs. clone mode
+
+Normal `sbx run` gives the sandbox access to the current workspace. Agent edits appear in the host working tree.
+
+That is useful for normal development, but it means the project itself is intentionally writable.
+
+For a Git repository you do not want the agent modifying directly, use:
+
+```bash
+sbx run --clone codex
+```
+
+Clone mode gives the agent its own copy inside the sandbox while leaving the source checkout outside the normal writable surface.
+
+A simple rule of thumb:
+
+```text
+trusted repo + normal coding        -> sbx run AGENT
+unfamiliar repo + high autonomy     -> sbx run --clone AGENT
+```
+
+## Provider credentials
+
+Docker Sandboxes has a host-side secret system for supported providers:
+
+```bash
+sbx secret set openai --oauth
+sbx secret set anthropic
+sbx secret set cursor
+```
+
+The useful security property is that supported service credentials can be handled by the host-side proxy instead of simply copying the real token into the sandbox.
+
+Do not mount your entire home directory just to reuse a login.
+
+## Client operating systems
+
+At the time of writing, Docker documents `sbx` for:
+
+| Client OS | General requirement |
+|---|---|
+| macOS | Apple silicon, macOS 14+ |
+| Windows | Windows 11 x64 with Windows Hypervisor Platform |
+| Linux | Ubuntu 24.04+ x64/arm64 with KVM and access to `/dev/kvm` |
+
+The important architectural point is that the agent runs in a separate Linux microVM regardless of whether the client machine is macOS, Windows, or Linux.
+
+---
+
+# 3. Ordinary Docker: simple and portable
+
+A normal Docker container is still a useful containment boundary, especially when Docker is already part of the development workflow.
+
+The minimal pattern is:
+
+```bash
+docker run --rm -it \
+  -v "$PWD:/workspace" \
+  -w /workspace \
+  AGENT_IMAGE
+```
+
+Only the current project is deliberately shared read-write.
+
+## OpenCode example
+
+OpenCode publishes an official image, so the basic command is particularly small:
+
+```bash
+docker run --rm -it \
+  -v "$PWD:/workspace" \
+  -w /workspace \
+  ghcr.io/anomalyco/opencode
+```
+
+<<insert image here: run `docker run --rm -it -v "$PWD:/workspace" -w /workspace ghcr.io/anomalyco/opencode` and show OpenCode starting with `/workspace` as the current project>>
+
+## Disable networking entirely
 
 Add:
 
@@ -119,7 +184,7 @@ Add:
 --network none
 ```
 
-Example:
+For example:
 
 ```bash
 docker run --rm -it \
@@ -129,13 +194,26 @@ docker run --rm -it \
   AGENT_IMAGE
 ```
 
-This blocks the model provider too. A cloud-backed agent normally cannot function in this mode unless its model/API is reachable through some other intentionally provided path.
+This is a real network cutoff, but it also blocks the model provider. A cloud-backed agent generally cannot function normally in this mode.
 
-## Persist login and config
+`--network none` is therefore most useful for:
 
-Do **not** solve persistence by mounting `$HOME`.
+- testing the containment boundary;
+- local-model workflows;
+- static inspection;
+- intentionally offline tasks.
 
-Instead, persist only the agent's own state directory, either with a Docker volume or a narrow private bind mount:
+## Persist agent login/config without mounting `$HOME`
+
+Do not solve persistence with:
+
+```bash
+-v "$HOME:/home/user"
+```
+
+That largely defeats the filesystem containment you were trying to create.
+
+Instead, persist only the harness state it actually needs:
 
 ```bash
 docker volume create agent-state
@@ -147,46 +225,260 @@ docker run --rm -it \
   AGENT_IMAGE
 ```
 
-The exact config/auth path differs by harness. Keep it narrow and treat it as secret-bearing state.
+The exact state path varies by harness. The principle does not:
 
-## OpenCode has an official image
+```text
+workspace     -> explicit read/write mount
+agent state   -> explicit persistent mount
+host home     -> absent
+host secrets  -> absent unless deliberately injected
+```
 
-OpenCode publishes `ghcr.io/anomalyco/opencode`, so the minimal container form is:
+---
+
+# 4. Passing local environment variables without opening the whole host
+
+This is where containment often becomes ambiguous.
+
+Local development frequently needs things such as:
+
+```text
+DATABASE_URL
+REDIS_URL
+API_BASE_URL
+STRIPE_TEST_KEY
+AWS_PROFILE
+NPM_TOKEN
+GITHUB_TOKEN
+```
+
+The first question should be:
+
+> **Does the agent itself need this value, or does only the code being tested need it?**
+
+Those are very different situations.
+
+## Pattern A: pass an environment file directly to the agent
+
+For ordinary Docker:
+
+```bash
+docker run --rm -it \
+  --env-file "$HOME/.config/myproject/dev.env" \
+  -v "$PWD:/workspace" \
+  -w /workspace \
+  AGENT_IMAGE
+```
+
+Docker Sandboxes 0.39.0+ supports the equivalent:
+
+```bash
+sbx run --env-file "$HOME/.config/myproject/dev.env" codex
+```
+
+or individual variables:
+
+```bash
+sbx run -e API_BASE_URL=https://dev.example.test claude
+```
+
+This is appropriate for **configuration the agent is allowed to know**.
+
+It is not a way to hide secrets from the agent.
+
+If a value is in the agent process environment, assume the agent or a subprocess can inspect it, print it, log it, or pass it somewhere else.
+
+A `.env` file being gitignored does not change that.
+
+### Good use
+
+```text
+NODE_ENV=development
+API_BASE_URL=http://localhost:8080
+FEATURE_FLAG_NEW_UI=true
+TEST_DATABASE_NAME=myapp_agent_test
+```
+
+### Higher-risk use
+
+```text
+AWS_SECRET_ACCESS_KEY=...
+PRODUCTION_DATABASE_URL=...
+GITHUB_TOKEN=...
+STRIPE_SECRET_KEY=...
+```
+
+If the agent truly needs a credential, use a narrowly scoped development credential rather than a production secret.
+
+## Pattern B: mount a local env/config file read-only
+
+Instead of copying a local file into the workspace, mount just that file:
+
+```bash
+docker run --rm -it \
+  -v "$PWD:/workspace" \
+  -v "$HOME/.config/myproject/dev.env:/run/config/dev.env:ro" \
+  -w /workspace \
+  AGENT_IMAGE
+```
+
+This has two useful properties:
+
+- the agent cannot modify the host copy through that mount;
+- the file does not need to live inside the project checkout.
+
+But it is **not secret isolation** if the agent can read `/run/config/dev.env`.
+
+Read-only means "cannot modify," not "cannot inspect."
+
+The same caveat applies to Docker Compose secrets. Compose can make a secret available as a file under `/run/secrets/...`, which is often safer than putting it into every process environment, but any process that is allowed to read that secret file still knows the secret.
+
+## Pattern C: keep secrets out of the agent and inject them only into the code runner
+
+This is the better pattern when:
+
+- the agent should edit code;
+- tests or the local application require secrets;
+- the agent does **not** need to know those secrets.
+
+Run the agent container without the env file:
 
 ```bash
 docker run --rm -it \
   -v "$PWD:/workspace" \
   -w /workspace \
-  ghcr.io/anomalyco/opencode
+  AGENT_IMAGE
 ```
 
-For persistent OpenCode auth/config, mount only its XDG config/data directories rather than the entire host home directory. The full `opencode-containment` launcher in this repository already handles this more carefully.
+Then run the secret-bearing test/application process separately:
 
-## Claude, Codex, and Cursor images
+```bash
+docker run --rm \
+  --env-file "$HOME/.config/myproject/dev.env" \
+  -v "$PWD:/workspace:ro" \
+  -w /workspace \
+  APP_TEST_IMAGE \
+  npm test
+```
 
-For ordinary Docker, use an image containing the CLI you want to run:
-
-- Claude Code: Anthropic documents dev-container/container workflows and a native installer.
-- Codex: install `@openai/codex` in a small development image or use your existing agent image.
-- Cursor: install Cursor CLI in a development image or use Docker Sandboxes' built-in Cursor template.
-
-The important containment controls are the same regardless of installer:
+Now the security boundary looks like this:
 
 ```text
-project -> explicit RW mount
-agent state -> explicit private persistent mount
-host home -> not mounted
-Docker socket -> not mounted
-network -> explicit choice
+Agent container
+  sees: source code
+  does not see: local secret env file
+
+Test/runtime container
+  sees: source code + runtime secrets
+  does not expose: host home
 ```
 
-Avoid clever `docker run` one-liners that download and reinstall an agent on every launch. A tiny reusable image is simpler to audit and faster to use.
+The human, CI runner, or a narrowly scoped helper can execute the secret-bearing test runner and return results to the agent.
+
+Do **not** mount `/var/run/docker.sock` into the agent just so it can create the second container. Giving the agent the Docker socket is effectively giving it control over the Docker host and can collapse the containment boundary.
+
+<<insert image here: show two terminals side by side; left runs the agent container and `env | grep DATABASE_URL` returns nothing, right runs the test container with `--env-file "$HOME/.config/myproject/dev.env"` and successfully starts the local test suite>>
+
+## Pattern D: use credential proxying when the secret is only needed for outbound API calls
+
+Docker Sandboxes has an experimental custom-secret proxy for services that are not already built in.
+
+Conceptually:
+
+```bash
+sbx secret set-custom \
+  --host api.example.com \
+  --env API_KEY \
+  --value '<secret>'
+```
+
+The sandbox receives a placeholder instead of the real value. The host-side proxy replaces that placeholder when traffic is sent to the configured host.
+
+This is substantially better than placing the real API token into the agent's environment when the use case fits the proxy model.
+
+For real workflows, avoid putting the secret directly on the command line because shell history may retain it. Prefer an interactive prompt, a secret manager reference, or another protected input mechanism when supported.
+
+## A practical two-file convention
+
+For projects that need a lot of local configuration, consider splitting environment values by trust level:
+
+```text
+.env.agent.example      committed example/schema
+.env.agent              safe local configuration the agent may receive
+private runtime env     outside the repo; credentials the agent should not receive
+```
+
+For example:
+
+```text
+# .env.agent
+NODE_ENV=development
+API_BASE_URL=http://app:8080
+LOG_LEVEL=debug
+```
+
+while the real database password or cloud token stays in something like:
+
+```text
+~/.config/myproject/dev.env
+```
+
+and is injected only into the runtime/test process that needs it.
+
+The separation is more useful than trying to build one giant `.env` file and then asking the sandbox to somehow hide selected lines from a process that already received the file.
 
 ---
 
-# 3. What not to mount
+# 5. Environment-variable handling differs by harness
 
-For a normal coding task, avoid exposing:
+The generic container rule remains simple:
+
+> If you inject a real secret into the agent's process environment, treat that secret as visible to the agent.
+
+Some harnesses add better controls on top of that.
+
+## Claude Code
+
+Claude Code's current sandbox can explicitly protect credential files and environment variables used by sandboxed Bash commands.
+
+It supports two useful modes:
+
+- `deny`: remove the environment variable from sandboxed commands;
+- `mask`: expose a placeholder while a proxy substitutes the real value only for allowed outbound destinations.
+
+That means Claude Code can support workflows where a command such as `gh`, `npm`, or an API client authenticates without the command itself receiving the real token.
+
+This protection applies to the sandboxed Bash execution path. It should not be generalized into "Claude can never see this secret" without checking the exact tool and settings path involved.
+
+Useful inspection command:
+
+```text
+/sandbox
+```
+
+<<insert image here: in Claude Code run `/sandbox` and capture the Mode, Overrides, Config, and Dependencies tabs showing the sandbox is active>>
+
+## Docker Sandboxes
+
+For ordinary non-secret configuration:
+
+```bash
+sbx run --env-file .env.agent codex
+```
+
+For supported provider/API credentials, prefer `sbx secret` so the host-side proxy can keep the real credential outside the VM where possible.
+
+## Codex, Cursor, and OpenCode
+
+Do not assume a normal `--env-file` or inherited shell environment is hidden merely because the harness has a sandbox.
+
+If the local application needs a secret but the agent does not, the cleanest cross-harness pattern remains a separate runtime/test boundary rather than exposing the secret to the agent process and depending on harness-specific filtering.
+
+---
+
+# 6. What not to mount
+
+For normal coding-agent work, avoid exposing these unless there is a specific reason:
 
 ```text
 /
@@ -196,18 +488,32 @@ $HOME
 ~/.kube
 ~/.config wholesale
 /var/run/docker.sock
+password-manager stores
 large secrets directories
 ```
 
-If the project itself contains credentials, `.env` files, private keys, or kubeconfigs, the agent can still see them because the project is intentionally shared.
+Also inspect the project itself.
 
-A container cannot protect a secret that you mount into the container.
+If the mounted repository contains:
+
+```text
+.env
+credentials.json
+service-account.json
+id_rsa
+kubeconfig
+terraform.tfstate
+```
+
+then those files are part of the agent's workspace unless another control explicitly prevents reading them.
+
+A container cannot protect a secret that you deliberately put inside its readable workspace.
 
 ---
 
-# 4. Optional Docker hardening
+# 7. Optional Docker hardening
 
-These are reasonable additions when the client still works with them:
+Once the basic mount boundary works, ordinary Docker can be tightened further:
 
 ```bash
 --security-opt no-new-privileges:true \
@@ -217,68 +523,329 @@ These are reasonable additions when the client still works with them:
 --pids-limit 512
 ```
 
-A read-only root filesystem and explicit tmpfs mounts can reduce the writable surface further.
+A more opinionated setup can also use:
 
-Do not blindly stack every restriction on top of every harness. Claude, Codex, and Cursor can use their own Linux namespace/sandbox mechanisms, and an outer container can prevent an inner sandbox from creating the namespaces it expects. In that situation, decide which layer is actually your security boundary instead of weakening both accidentally.
+- a read-only container root filesystem;
+- explicit tmpfs writable locations;
+- a non-root container user;
+- narrow network policy;
+- read-only host config mounts;
+- separate persistent agent state;
+- no private SSH key mounts;
+- SSH agent forwarding only when needed.
 
----
+Do not blindly stack every Linux restriction on top of every harness. Claude, Codex, and Cursor may create their own namespaces or sandbox layers. A highly restricted outer container can prevent an inner sandbox from starting.
 
-# 5. Containment is not the same as approvals
-
-Three different controls are often mixed together:
-
-| Control | Question it answers |
-|---|---|
-| Agent permissions / approvals | "Should the harness let the model try this action?" |
-| Native sandbox | "What can the resulting process actually reach on this OS?" |
-| Container / microVM | "What part of the host exists inside the agent's execution environment at all?" |
-
-Permission prompts are useful, but they are not a replacement for an OS-enforced boundary.
-
-This difference is particularly important for OpenCode: its permissions can allow, ask, or deny tools, but current V2 documentation explicitly notes that shell commands execute with the host user's filesystem, process, and network authority. Use external containment when you need an actual runtime boundary.
-
-See [`native-isolation.md`](native-isolation.md) for the harness-by-harness details.
+Choose a clear primary boundary and test the nested behavior rather than assuming "more sandbox flags" always means "more secure."
 
 ---
 
-# 6. Which option should I use?
+# 8. Native isolation: Claude Code
 
-### I just want a safe, simple default
+Claude Code has a genuine OS-backed sandbox for its **Bash tool**.
+
+The distinction matters: the sandbox applies to Bash commands and their child processes. Claude's other built-in tools have their own permission model.
+
+## macOS
+
+**Native sandbox: strong**
+
+Claude Code uses the macOS **Seatbelt** framework.
+
+The sandbox can restrict:
+
+- filesystem reads and writes;
+- allowed network domains;
+- subprocess behavior.
+
+Run:
+
+```text
+/sandbox
+```
+
+Claude Code can run sandboxed commands automatically while still requiring approval when a command needs to escape the configured boundary.
+
+Strict deployments can also disable the unsandboxed retry path.
+
+## Linux
+
+**Native sandbox: strong**
+
+Claude uses **bubblewrap (`bwrap`)** for filesystem isolation and `socat` for the sandbox network proxy. An optional seccomp component can further constrain Unix socket behavior.
+
+On distributions that restrict unprivileged user namespaces, additional host configuration may be required before bubblewrap can work.
+
+## Windows native
+
+**Native sandbox: not supported**
+
+Anthropic explicitly documents native Windows as unsupported for Claude Code's sandbox.
+
+Use WSL2 when you want the native Claude Code sandbox on a Windows client.
+
+## WSL2
+
+**Native sandbox: Linux implementation**
+
+Claude uses the Linux bubblewrap path inside WSL2.
+
+One Windows-specific concern is interop: WSL can launch Windows binaries through host integration. Claude documents additional socket/seccomp considerations if you need to prevent a sandboxed Linux process from escaping through Windows executable interop.
+
+## Claude-specific credential isolation
+
+Claude's current sandbox has unusually useful credential controls.
+
+`sandbox.credentials.envVars` can remove or mask selected variables from sandboxed Bash commands. Mask mode can show the command a sentinel value while a proxy injects the real credential only to allowed hosts.
+
+That is stronger than simply putting a real token in `--env-file`.
+
+---
+
+# 9. Native isolation: OpenAI Codex CLI
+
+Codex separates approval policy from sandbox policy and has substantial platform-specific sandbox implementations.
+
+## macOS
+
+**Native sandbox: strong**
+
+Codex uses macOS Seatbelt through `/usr/bin/sandbox-exec` and generates profiles that constrain filesystem and network behavior.
+
+## Linux
+
+**Native sandbox: strong**
+
+Current Codex source uses **bubblewrap as the default Linux filesystem sandbox**.
+
+The implementation can:
+
+- expose `/` read-only;
+- reopen configured writable roots;
+- re-protect sensitive paths under writable roots;
+- isolate user and PID namespaces;
+- isolate the network namespace when network is restricted;
+- apply `PR_SET_NO_NEW_PRIVS`;
+- apply seccomp network filtering;
+- route allowed traffic through a managed proxy.
+
+Codex also retains a legacy **Landlock + mount protections** path for compatible configurations.
+
+## Windows native
+
+**Native sandbox: real, but platform-specific and evolving**
+
+Codex contains a dedicated Windows sandbox implementation rather than relying only on approval prompts.
+
+Current source includes:
+
+- dedicated sandbox principals/users;
+- ACL-based filesystem restrictions;
+- explicit read/write roots;
+- deny-read handling;
+- Windows Filtering Platform network policy;
+- online/offline sandbox identities;
+- setup and diagnostic flows.
+
+The implementation is substantial enough that Windows should not be described as "no sandbox," but its architecture is different from the Linux/macOS implementations.
+
+## WSL2
+
+**Native sandbox: strong Linux path**
+
+Codex explicitly uses its normal Linux bubblewrap path on WSL2.
+
+WSL1 does not provide the user-namespace behavior required for that path.
+
+---
+
+# 10. Native isolation: OpenCode
+
+OpenCode is the clearest example of why **permissions are not containment**.
+
+Its V2 permission system can:
+
+- allow an operation;
+- deny an operation;
+- ask before an operation;
+- separately gate external-directory access.
+
+That is useful policy.
+
+However, the current OpenCode documentation explicitly warns that the `shell` tool runs with the host user's **filesystem, process, and network authority**.
+
+## macOS
+
+**Native sandbox: permissions only**
+
+There is no documented OpenCode-owned equivalent to Claude/Codex Seatbelt sandboxing.
+
+Use an external boundary when you need containment.
+
+## Linux
+
+**Native sandbox: permissions only**
+
+Allowed OpenCode shell commands are not automatically placed into an OpenCode-owned bubblewrap, Landlock, namespace, or seccomp sandbox.
+
+This is the main use case behind [`opencode-containment`](https://github.com/christian-taillon/opencode-containment).
+
+## Windows native
+
+**Native sandbox: permissions only**
+
+OpenCode's approval model does not create a dedicated Windows restricted runtime comparable to Codex's Windows sandbox.
+
+## WSL2
+
+**Native sandbox: permissions only inside the WSL environment**
+
+WSL2 changes the surrounding environment, but an allowed OpenCode command can still reach what the WSL user can reach, including Windows-mounted paths when available.
+
+For OpenCode, external container or microVM containment is especially useful.
+
+---
+
+# 11. Native isolation: Cursor
+
+Cursor has a real sandbox layer in addition to its command-review/permission behavior.
+
+Cursor's `permissions.json` and `sandbox.json` solve different problems:
+
+- permissions decide which actions require review;
+- sandbox policy decides what sandboxed processes can actually reach.
+
+## macOS
+
+**Native sandbox: strong**
+
+Cursor uses **Seatbelt through `sandbox-exec`**.
+
+A generated profile constrains filesystem, network, and subprocess behavior.
+
+## Linux
+
+**Native sandbox: strong**
+
+Cursor's Linux sandbox uses native Linux controls including **Landlock and seccomp**. Cursor also reports a bubblewrap fallback when that path is active.
+
+Useful diagnostic variables include:
+
+```bash
+echo "$CURSOR_SANDBOX"
+echo "$CURSOR_SANDBOX_LANDLOCK_STATUS"
+```
+
+The second variable reports states such as `fully_enforced` or `bubblewrap`.
+
+<<insert image here: in a Cursor sandboxed terminal run `printf 'sandbox=%s\nbackend=%s\n' "$CURSOR_SANDBOX" "$CURSOR_SANDBOX_LANDLOCK_STATUS"` and capture the result>>
+
+## Windows native
+
+Cursor's published engineering description says its Windows implementation runs the **Linux sandbox inside WSL2** rather than building an unrelated Windows-native sandbox stack.
+
+That means Windows users should think of Cursor's sandbox boundary as a managed WSL2/Linux isolation path.
+
+## WSL2
+
+When Cursor's sandbox runs through WSL2, evaluate the reachable Windows mounts and host interop just as you would for other WSL-based agent setups.
+
+---
+
+# 12. Cross-harness native isolation summary
+
+| Harness | macOS | Linux | Windows client | WSL2 |
+|---|---|---|---|---|
+| **Claude Code** | Seatbelt | bubblewrap + network proxy | Native sandbox unsupported | Linux bubblewrap path |
+| **Codex CLI** | Seatbelt | bubblewrap + seccomp; legacy Landlock available | Dedicated Windows sandbox | Normal Linux bubblewrap path |
+| **OpenCode** | Permissions only | Permissions only | Permissions only | Permissions only |
+| **Cursor** | Seatbelt | Landlock/seccomp, bubblewrap fallback | Linux sandbox through WSL2 | Linux sandbox path |
+
+This table is about **runtime isolation**, not model quality, coding quality, permissions UX, or product security overall.
+
+---
+
+# 13. Native sandbox vs. container vs. microVM
+
+| Boundary | Useful against | Does not automatically prevent |
+|---|---|---|
+| Harness approvals | accidental or disallowed actions | an allowed command using broad OS authority |
+| Harness native sandbox | filesystem/network/process access outside policy | damage inside writable areas; deliberately supplied credentials |
+| Docker/Podman | broad host filesystem/process exposure | shared-kernel escape risk; damage to writable mounts |
+| Docker Sandbox microVM | stronger whole-environment and kernel separation | damage to intentionally shared workspace; misuse of deliberately granted access |
+
+No layer fixes an overly broad mount or overly powerful credential.
+
+A strong practical design usually looks like:
+
+```text
+workspace      -> only the project
+write access   -> only where code must change
+agent config   -> only the harness state it needs
+runtime env    -> only configuration it actually needs
+credentials    -> scoped, proxied, or kept in a separate runner
+network        -> only what the task requires
+host           -> otherwise absent
+```
+
+---
+
+# 14. Suggested starting points
+
+## Lowest-friction stronger boundary
 
 ```bash
 sbx run --clone AGENT
 ```
 
-Replace `AGENT` with `claude`, `codex`, `cursor`, or `opencode`.
-
-### I want edits to appear immediately in my working tree
+## Normal development with changes landing directly in the checkout
 
 ```bash
 sbx run AGENT
 ```
 
-### I already live in Docker
+## Existing Docker-based development environment
 
-Use a normal container and expose only the project plus narrow persistent agent state.
+```bash
+docker run --rm -it \
+  -v "$PWD:/workspace" \
+  -w /workspace \
+  AGENT_IMAGE
+```
 
-### I use OpenCode heavily and want a tuned daily environment
+## Local application needs secrets but agent does not
 
-Use this repository's `opencode-container` or `opencode-sandbox` launchers. They add the opinionated pieces intentionally omitted from this cheat sheet: workspace guardrails, isolated state/auth handling, host integration choices, hardening, profiles, and Docker Sandboxes support.
+Keep the secret env file outside the workspace and inject it into a **separate test/runtime process**, not the agent.
 
-### I want no external runtime at all
+## OpenCode power user
 
-Check the harness's native sandbox support first: [`native-isolation.md`](native-isolation.md).
+Use [`opencode-containment`](https://github.com/christian-taillon/opencode-containment) as a more opinionated reference implementation rather than rebuilding all of the state handling and guardrails in one increasingly complicated `docker run` command.
 
 ---
 
-# Vendor references
+# References
+
+## Docker
 
 - Docker Sandboxes: <https://docs.docker.com/ai/sandboxes/>
-- Docker Sandboxes usage and clone mode: <https://docs.docker.com/ai/sandboxes/usage/>
-- Docker Sandboxes agents: <https://docs.docker.com/reference/cli/sbx/run/>
+- Docker Sandboxes usage and environment variables: <https://docs.docker.com/ai/sandboxes/usage/>
+- Docker Sandboxes credentials: <https://docs.docker.com/ai/sandboxes/configuration/credentials/>
+- `sbx secret`: <https://docs.docker.com/reference/cli/sbx/secret/>
+- Experimental custom secrets: <https://docs.docker.com/reference/cli/sbx/secret/set-custom/>
+- `docker run --env-file`: <https://docs.docker.com/reference/cli/docker/container/run/>
+- Docker Compose secrets: <https://docs.docker.com/compose/how-tos/use-secrets/>
+
+## Harnesses
+
 - Claude Code sandboxing: <https://code.claude.com/docs/en/sandboxing>
-- Codex sandboxing: <https://developers.openai.com/codex/security>
-- OpenCode permissions: <https://opencode.ai/v2/docs/permissions>
-- OpenCode installation / Docker image: <https://opencode.ai/docs/>
+- Codex security/sandboxing: <https://developers.openai.com/codex/security>
+- Codex Linux sandbox source: <https://github.com/openai/codex/tree/main/codex-rs/linux-sandbox>
+- Codex Windows sandbox source: <https://github.com/openai/codex/tree/main/codex-rs/windows-sandbox-rs>
+- OpenCode V2 permissions: <https://opencode.ai/v2/docs/permissions>
 - Cursor run modes: <https://cursor.com/docs/agent/security/run-modes>
 - Cursor sandbox configuration: <https://cursor.com/docs/reference/sandbox>
+- Cursor sandbox engineering overview: <https://cursor.com/blog/agent-sandboxing>
+
+## Opinionated reference implementation
+
+- OpenCode containment: <https://github.com/christian-taillon/opencode-containment>
