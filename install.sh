@@ -33,11 +33,14 @@ Next steps:
   1) Start the container: make run
   2) Optional secure mode: make run-secure
   3) Optional sandbox backend: make run-sandbox
-  4) OpenCode 2 preview: make run-opencode2 (or use opencode2-container)
-     v2 sandbox: make run-opencode2-sandbox (or use opencode2-sandbox)
-  5) Optional: copy opencode-local.example.sh to opencode-local.sh and customize
+  4) Optional: copy opencode-local.example.sh to opencode-local.sh and customize
      - proxy / custom CA passthrough
      - local extra Alpine packages for builds
-  6) Optional CLI install: make shell-install
+     - trusted local plugin checkouts via OPENCODE_LOCAL_PLUGIN_DIRS
+  5) Optional CLI install: make shell-install
+
+OpenCode runtime:
+  - the image follows ghcr.io/anomalyco/opencode:latest
+  - legacy opencode2-* command names are compatibility aliases to the same runtime
 
 EOF
