@@ -50,7 +50,7 @@ That allows a shared OpenCode config entry such as:
 ```jsonc
 "plugin": [
   [
-    "file:///home/christian/github/opencode-jev-compactor/src/index.ts",
+    "file:///home/christian/github/opencode-jev-compactor/dist/index.js",
     { "delivery": "observe" }
   ]
 ]
