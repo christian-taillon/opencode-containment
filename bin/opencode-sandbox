@@ -51,39 +51,27 @@ if [[ -f "$LOCAL_HOOK" ]]; then
     source "$LOCAL_HOOK"
 fi
 
-# The v2 wrappers select this mode with a private positional marker. Resolve it
-# after the local hook so environment defaults cannot change the executable.
-LAUNCHER_MODE="stable"
+# Legacy opencode2-* wrappers remain as compatibility aliases. All sandbox
+# launchers execute the same latest OpenCode binary.
+LAUNCHER_COMMAND="opencode-sandbox"
 if [[ "${1:-}" == "--__opencode2" ]]; then
-    LAUNCHER_MODE="v2"
+    LAUNCHER_COMMAND="opencode2-sandbox"
     shift
 fi
-if [[ "$LAUNCHER_MODE" == "v2" ]]; then
-    LAUNCHER_COMMAND="opencode2-sandbox"
-    OPENCODE_EXECUTABLE="opencode2"
-else
-    LAUNCHER_COMMAND="opencode-sandbox"
-    OPENCODE_EXECUTABLE="opencode"
-fi
+LAUNCHER_MODE="stable"
+OPENCODE_EXECUTABLE="opencode"
 
 PROFILE="${OPENCODE_PROFILE:-native}"
 WORKSPACE="${OPENCODE_WORKSPACE:-$PWD}"
 SANDBOX_NAME="${OPENCODE_SANDBOX_NAME:-}"
 SANDBOX_MEMORY="${OPENCODE_SANDBOX_MEMORY:-8g}"
 SANDBOX_CPUS="${OPENCODE_SANDBOX_CPUS:-4}"
-if [[ "$LAUNCHER_MODE" == "v2" ]]; then
-    SANDBOX_TEMPLATE="${OPENCODE2_SANDBOX_TEMPLATE:-${OPENCODE_SANDBOX_TEMPLATE:-localhost/opencode-containment:latest}}"
-else
-    SANDBOX_TEMPLATE="${OPENCODE_SANDBOX_TEMPLATE:-}"
-fi
+SANDBOX_TEMPLATE="${OPENCODE_SANDBOX_TEMPLATE:-localhost/opencode-containment:latest}"
 SBX_BIN="${OPENCODE_SBX_BIN:-sbx}"
 OPENCODE_CONFIG_DIR="${OPENCODE_CONFIG_DIR:-${XDG_CONFIG_HOME:-$HOME/.config}/opencode}"
 OPENCODE_HOST_STATE_DIR="${OPENCODE_HOST_STATE_DIR:-${XDG_DATA_HOME:-$HOME/.local/share}/opencode}"
-if [[ "$LAUNCHER_MODE" == "v2" ]]; then
-    OPENCODE_SANDBOX_STATE_DIR="${OPENCODE2_SANDBOX_STATE_DIR:-${OPENCODE_SANDBOX_STATE_DIR:-${XDG_DATA_HOME:-$HOME/.local/share}/opencode2-sandbox}}"
-else
-    OPENCODE_SANDBOX_STATE_DIR="${OPENCODE_SANDBOX_STATE_DIR:-${XDG_DATA_HOME:-$HOME/.local/share}/opencode-sandbox}"
-fi
+OPENCODE_SANDBOX_STATE_DIR="${OPENCODE_SANDBOX_STATE_DIR:-${XDG_DATA_HOME:-$HOME/.local/share}/opencode-sandbox}"
+OPENCODE_JEV_PLUGIN_DIR="${OPENCODE_JEV_PLUGIN_DIR-$HOME/github/opencode-jev-compactor}"
 OPENCODE_SYNC_HOST_AUTH="${OPENCODE_SYNC_HOST_AUTH:-1}"
 
 show_help() {
@@ -189,11 +177,7 @@ if [[ "$REAL_WORKSPACE" != "$START_DIR" && "$REAL_WORKSPACE" != "$START_DIR"/* ]
 fi
 
 if [[ -z "$SANDBOX_NAME" ]]; then
-    if [[ "$LAUNCHER_MODE" == "v2" ]]; then
-        SANDBOX_NAME="opencode2-$(sanitize_sandbox_name "$(basename "$REAL_WORKSPACE")")"
-    else
-        SANDBOX_NAME="opencode-$(sanitize_sandbox_name "$(basename "$REAL_WORKSPACE")")"
-    fi
+    SANDBOX_NAME="opencode-$(sanitize_sandbox_name "$(basename "$REAL_WORKSPACE")")"
 fi
 
 if ! command -v "$SBX_BIN" >/dev/null 2>&1; then
@@ -220,6 +204,13 @@ if [[ -d "$OPENCODE_CONFIG_DIR" ]]; then
     EXTRA_WORKSPACES+=("$REAL_OPENCODE_CONFIG_DIR:ro")
 else
     REAL_OPENCODE_CONFIG_DIR=""
+fi
+
+if [[ -n "$OPENCODE_JEV_PLUGIN_DIR" && -d "$OPENCODE_JEV_PLUGIN_DIR" ]]; then
+    REAL_JEV_PLUGIN_DIR="$(resolve_path "$OPENCODE_JEV_PLUGIN_DIR")"
+    EXTRA_WORKSPACES+=("$REAL_JEV_PLUGIN_DIR:ro")
+else
+    REAL_JEV_PLUGIN_DIR=""
 fi
 
 SANDBOX_OPENCODE_HOME="/home/agent"
@@ -278,6 +269,7 @@ EXEC_ARGS=(
     -e "XDG_STATE_HOME=/home/agent/.local/state"
     -w "$REAL_WORKSPACE"
 )
+[[ -n "${TYPESAFE_API_KEY:-}" ]] && EXEC_ARGS+=(-e "TYPESAFE_API_KEY=$TYPESAFE_API_KEY")
 
 if [[ -t 0 && -t 1 ]]; then
     EXEC_ARGS+=(-i -t)
