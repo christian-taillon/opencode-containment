@@ -25,7 +25,7 @@ The image is built from `~/github/opencode-containment/Dockerfile` and tagged
 as `localhost/opencode-containment:latest`. It is **not** available from any
 registry — it must be built locally.
 
-Base: `ghcr.io/anomalyco/opencode:latest` (Alpine). The Dockerfile layers on:
+Base: `ghcr.io/anomalyco/opencode:latest` (Alpine). There is no second pinned OpenCode preview binary; rebuilding with `--pull` resolves the current stable base image. The Dockerfile layers on:
 
 - Rust toolchain (stable), `uv`, Python 3, Node.js, npm
 - neovim (with tree-sitter parser dir), marksman (Markdown LSP)
@@ -72,6 +72,9 @@ All mounts use `:Z` for SELinux relabeling (host is SELinux Enforcing).
 
 **Not mounted**: private SSH keys, `.env` files, Docker socket, `/`, `$HOME`.
 
+For a local OpenCode plugin referenced by a host `file://` URL, add only that reviewed checkout as a read-only mount at the same absolute path. The foreground launchers automate this with `OPENCODE_PLUGIN_PATHS`. A hand-written systemd/Podman service must add the equivalent narrow read-only mount itself. Do not mount all of `$HOME` to make a plugin path resolve.
+
+
 Foreground launcher invocations may additionally use repeatable
 `--with-tool COMMAND_OR_PATH`. Each selected executable is snapshotted into a
 private temporary directory and mounted read-only at `/opt/opencode-tools` with
@@ -100,6 +103,8 @@ Loaded from `~/.config/opencode/opencode-web-container.env`:
 ```
 OPENCODE_SERVER_PASSWORD=<set in your private env file; do not commit>
 OPENCODE_ENABLE_EXA=true
+# Optional when TypeSafe Jev compaction is enabled:
+TYPESAFE_API_KEY=<private key; do not commit>
 ```
 
 Additional env vars set inline in the service file:
