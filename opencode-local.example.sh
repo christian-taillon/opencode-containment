@@ -5,7 +5,7 @@
 # This file is gitignored - personal settings stay local.
 #
 # This script is sourced by bin/opencode-container and bin/opencode-sandbox.
-# The opencode2-* wrappers use the same hook and settings.
+# Legacy opencode2-* compatibility wrappers use the same hook and settings.
 # You can set environment variables, modify DOCKER_ARGS for the container backend,
 # or set OPENCODE_CONFIG_CONTENT.
 #
@@ -73,12 +73,6 @@
 # Example: mount a personal provider config read-only.
 # DOCKER_ARGS+=(--volume "$HOME/.config/gcloud:/home/opencode/.config/gcloud:ro")
 #
-# Example: develop a local OpenCode plugin inside the container. The mount
-# destination must equal the host path used in the plugin's file:// URL, and
-# the whole checkout must be mounted (not just dist/) so node_modules resolve.
-# Keep it read-only and only mount plugin code you trust and review.
-# DOCKER_ARGS+=(--volume "$HOME/github/opencode-quota:$HOME/github/opencode-quota:ro,Z")
-#
 # Offline / audit mode: block all container outbound traffic.
 # DOCKER_ARGS+=(--network none)
 #
@@ -120,5 +114,3 @@
 
 # Sandbox-only support files, including the read-only auth mirror:
 # export OPENCODE_SANDBOX_STATE_DIR="${XDG_DATA_HOME:-$HOME/.local/share}/opencode-sandbox"
-# export OPENCODE2_SANDBOX_TEMPLATE="localhost/opencode-containment:latest"
-# export OPENCODE2_SANDBOX_STATE_DIR="${XDG_DATA_HOME:-$HOME/.local/share}/opencode2-sandbox"
