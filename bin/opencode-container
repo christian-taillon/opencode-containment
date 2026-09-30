@@ -311,17 +311,13 @@ if [[ "${1:-}" == "--__opencode2" ]]; then
 fi
 if [[ "$LAUNCHER_MODE" == "v2" ]]; then
     LAUNCHER_COMMAND="opencode2-container"
-    OPENCODE_EXECUTABLE="opencode2"
-    WEB_NAME_PREFIX="opencode2-web-"
-    WEB_HEALTH_PATH="/api/health"
-    OPENCODE_CONTAINER_HOME="${OPENCODE2_CONTAINER_HOME:-${OPENCODE_CONTAINER_HOME:-$HOME/.local/share/opencode2-container}}"
 else
     LAUNCHER_COMMAND="opencode-container"
-    OPENCODE_EXECUTABLE="opencode"
-    WEB_NAME_PREFIX="opencode-web-"
-    WEB_HEALTH_PATH="/global/health"
-    OPENCODE_CONTAINER_HOME="${OPENCODE_CONTAINER_HOME:-$HOME/.local/share/opencode-container}"
 fi
+OPENCODE_EXECUTABLE="opencode"
+WEB_NAME_PREFIX="opencode-web-"
+WEB_HEALTH_PATH="/global/health"
+OPENCODE_CONTAINER_HOME="${OPENCODE_CONTAINER_HOME:-$HOME/.local/share/opencode-container}"
 
 # Default values (env-overridable)
 PROFILE="${OPENCODE_PROFILE:-secure}"
@@ -341,6 +337,7 @@ HOST_CONFIG_DIR="${OPENCODE_CONFIG_DIR:-${XDG_CONFIG_HOME:-$HOME/.config}/openco
 HOST_DATA_DIR="${OPENCODE_HOST_STATE_DIR:-${XDG_DATA_HOME:-$HOME/.local/share}/opencode}"
 HOST_CACHE_DIR="${OPENCODE_HOST_CACHE_DIR:-${XDG_CACHE_HOME:-$HOME/.cache}/opencode}"
 HOST_STATE_DIR="${OPENCODE_HOST_RUNTIME_STATE_DIR:-${XDG_STATE_HOME:-$HOME/.local/state}/opencode}"
+JEV_PLUGIN_DIR="${OPENCODE_JEV_PLUGIN_DIR-$HOME/github/opencode-jev-compactor}"
 
 # Container persistent state directories (host-side paths, bind-mounted in).
 CONTAINER_DATA_DIR="$OPENCODE_CONTAINER_HOME/local/share/opencode"
@@ -1361,6 +1358,7 @@ DOCKER_ARGS+=(
 # Pass GitHub tokens if they exist
 [[ -n "${GITHUB_TOKEN:-}" ]] && DOCKER_ARGS+=(--env GITHUB_TOKEN="$GITHUB_TOKEN")
 [[ -n "${GH_TOKEN:-}" ]] && DOCKER_ARGS+=(--env GH_TOKEN="$GH_TOKEN")
+[[ -n "${TYPESAFE_API_KEY:-}" ]] && DOCKER_ARGS+=(--env TYPESAFE_API_KEY="$TYPESAFE_API_KEY")
 
 # Pass standard proxy settings through only when explicitly set.
 pass_env_if_set \
@@ -1424,6 +1422,13 @@ DOCKER_ARGS+=(
 # existence and use the resolved host config dir (honors XDG_CONFIG_HOME).
 if [[ -d "$HOST_CONFIG_DIR" ]]; then
     DOCKER_ARGS+=(--volume "$HOST_CONFIG_DIR:$CONTAINER_CONFIG_PATH:ro")
+fi
+
+# Optional trusted Jev plugin checkout. Preserve the absolute host path so a
+# file:// plugin URL in the shared OpenCode config resolves identically inside
+# the container. Set OPENCODE_JEV_PLUGIN_DIR="" to disable this mount.
+if [[ -n "$JEV_PLUGIN_DIR" && -d "$JEV_PLUGIN_DIR" ]]; then
+    DOCKER_ARGS+=(--volume "$JEV_PLUGIN_DIR:$JEV_PLUGIN_DIR:$RO_MOUNT_OPTS")
 fi
 
 # Set XDG base dirs explicitly so OpenCode resolves config/data/cache/state
