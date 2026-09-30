@@ -25,7 +25,7 @@ The image is built from `~/github/opencode-containment/Dockerfile` and tagged
 as `localhost/opencode-containment:latest`. It is **not** available from any
 registry — it must be built locally.
 
-Base: `ghcr.io/anomalyco/opencode:latest` (Alpine). The Dockerfile layers on:
+Base: `ghcr.io/anomalyco/opencode:latest` (Alpine). OpenCode is deliberately not pinned separately; rebuilding with `--pull` advances the runtime to the current base image. The Dockerfile layers on:
 
 - Rust toolchain (stable), `uv`, Python 3, Node.js, npm
 - neovim (with tree-sitter parser dir), marksman (Markdown LSP)
@@ -67,6 +67,7 @@ systemctl --user restart opencode-web-container.service
 | `~/.gitconfig` | `/home/opencode/.gitconfig` | RO, `:Z` | Git config |
 | `~/.ssh/config` | `/home/opencode/.ssh/config` | RO, `:Z` | SSH config (no keys) |
 | `~/.ssh/known_hosts` | `/home/opencode/.ssh/known_hosts` | RO, `:Z` | SSH known hosts |
+| `~/github/opencode-jev-compactor` | `/home/christian/github/opencode-jev-compactor` | RO, `:Z` | Optional local Jev plugin checkout; destination must match the `file://` config path |
 
 All mounts use `:Z` for SELinux relabeling (host is SELinux Enforcing).
 
@@ -100,7 +101,15 @@ Loaded from `~/.config/opencode/opencode-web-container.env`:
 ```
 OPENCODE_SERVER_PASSWORD=<set in your private env file; do not commit>
 OPENCODE_ENABLE_EXA=true
+# Only when the TypeSafe Jev plugin is enabled:
+TYPESAFE_API_KEY=<private key; do not commit>
 ```
+
+The detached systemd deployment bypasses the foreground launcher, so any local
+`file://` plugin checkout must also be present as an explicit read-only bind
+mount in the unit. For Jev, mount the checkout at the exact absolute path used
+by global OpenCode config. Do not mount all of `$HOME` or `~/github` solely
+to satisfy a plugin path.
 
 Additional env vars set inline in the service file:
 
@@ -124,6 +133,16 @@ Run `make sync-config` (or `opencode-container --sync-config`) from the
 `opencode-containment` repo to seed auth and cache from host OpenCode into
 the container state directories. This only needs to be done once before
 first start, or when host auth changes.
+
+When the Jev plugin checkout or its OpenCode config changes, restart the user
+service after confirming the read-only plugin mount and `TYPESAFE_API_KEY`
+environment are present:
+
+```bash
+systemctl --user daemon-reload
+systemctl --user restart opencode-web-container.service
+journalctl --user -u opencode-web-container -f
+```
 
 ## Connecting
 
