@@ -36,22 +36,13 @@ This repo includes a prompt injection / data exfiltration demo under `demo/`. It
 
 That is the normal path. The workspace is your current project directory, mounted read-write at `/workspace`; host config mounts stay read-only, and OpenCode auth is copied into isolated container state.
 
-The pinned OpenCode 2.0 preview is available side by side on x86_64 and arm64
-Linux hosts:
+OpenCode is deliberately **not pinned** in this project. The image is built
+`FROM ghcr.io/anomalyco/opencode:latest`, and `make update` pulls the newest
+OpenCode base image before rebuilding containment.
 
-```bash
-opencode2-container       # v2 container backend
-opencode2-sandbox         # v2 Docker Sandboxes backend
-opencode2-containment     # convenience alias for opencode2-container
-```
-
-These commands do not replace the stable `opencode-container` or
-`opencode-sandbox` commands. The preview uses separate default state
-directories (`opencode2-container` and `opencode2-sandbox`), shares the host
-OpenCode config/data sources for auth seeding, and does not support v1
-plugins. It is pinned to `@opencode-ai/cli` beta `0.0.0-beta-18743` and is
-subject to upstream beta compatibility changes. The image selects
-`cli-linux-x64-baseline-musl` on x86_64 and `cli-linux-arm64-musl` on arm64.
+The old `opencode2-*` command names remain only as compatibility aliases. They
+invoke the same current `opencode` runtime and do not maintain a second binary,
+state tree, plugin API, or web-server implementation.
 
 Useful follow-ups:
 
@@ -82,26 +73,6 @@ opencode-container --web-server start --web-port 4097
 opencode-container --web-server status --web-port 4097
 opencode-container --web-server stop --web-port 4097
 ```
-
-The v2 preview has a separate web-server namespace and uses `serve` plus the
-v2 health endpoint. The project install does not install a host `opencode2`
-binary. When the server URL is reachable from a container, use the contained
-client:
-
-```bash
-opencode2-container --web-server start
-opencode2-container --server http://host.containers.internal:4096
-```
-
-The contained client cannot normally reach a loopback-only host listener at
-`127.0.0.1`; the example requires a server published on a container-reachable
-host address (Podman provides `host.containers.internal`; Docker may require
-its equivalent host-gateway address). For the default loopback server, install
-the separate beta host CLI and run `opencode2 --server http://127.0.0.1:4096`.
-Use the username `opencode` and the generated password
-in the credentials file when connecting to a v2 server. The v2 client uses
-`--server`; do not use the v1 `attach` command. The same loopback default and
-explicit `--network-accessible` opt-in apply.
 
 The server is published only on `127.0.0.1`. The launcher requires Docker
 Engine 28 or later for web-server starts: Docker releases before 28.0.0 can
@@ -137,8 +108,7 @@ port to the LAN. Containers explicitly attached to that network and Docker
 daemon administrators remain trusted.
 
 For this entrypoint-independent launch path, a custom `OPENCODE_IMAGE` must
-provide `/bin/sh` and the `opencode` executable. A custom image used with
-`opencode2-container` must additionally provide `opencode2`.
+provide `/bin/sh` and the `opencode` executable.
 
 For running the web server as a **systemd service** (auto-start, restart,
 status) and for **attaching a TUI** to a running web server (including the
@@ -175,8 +145,8 @@ The source is opened before copying to close replacement races after open; a
 host process changing the path during the narrow validation/open window or
 writing in place during the copy remains outside this shell-level guarantee.
 
-This option is supported by the stable and `opencode2-container` launchers,
-including raw and interactive launches. It is rejected with `--web-server`.
+This option is supported by the container launcher, including raw and interactive
+launches. It is rejected with `--web-server`.
 It is intended for WSL2 + Docker on Windows and Bash + Docker on Linux or
 macOS; native PowerShell and Git Bash launchers are not supported. Only the
 selected executable is imported: a selected symlink is snapshotted from its
@@ -210,11 +180,10 @@ If you are behind a proxy or need an internal CA bundle, set the standard proxy 
 | `container` | `bin/opencode-container` | daily local workflow, richer host integration | weaker isolation than a microVM sandbox |
 | `sandbox` | `bin/opencode-sandbox` | stronger isolation, cleaner runtime boundary | fewer host-level customization knobs |
 
-The v2 sibling launchers use the same profiles, workspace guardrails, XDG
-sync, and containment defaults. The v2 sandbox uses the local containment
-image as its default `sbx` template so that `opencode2` is available; set
-`OPENCODE2_SANDBOX_TEMPLATE` when using another template that contains the
-preview binary.
+The sandbox backend uses the locally built containment image as its default
+template, so container and sandbox runs follow the same OpenCode latest base
+image. Existing named sandboxes retain their filesystem layer until they are
+removed and recreated.
 
 Default profiles differ between the two launchers. `bin/opencode-container` defaults to the `secure` profile when run directly. `bin/opencode-sandbox` defaults to the `native` profile when run directly. The Makefile targets (`make run`, `make run-native`, `make run-sandbox`) pass `--profile native` explicitly.
 
@@ -280,7 +249,7 @@ Both backends are designed with security as a primary concern. See [SECURITY_REP
 - **Filesystem Containment**: The `container` backend uses a read-only root with explicit writable paths. The `sandbox` backend relies on `sbx` to manage sandbox state and isolation.
 - **Workspace Guardrails**: The launcher rejects unsafe workspace mounts (`/`, `$HOME`, or paths outside the starting directory tree).
 - **OpenCode Auth**: Host OpenCode login state is copied into the container's isolated persistent state before launch. This preserves provider visibility without mounting the entire host home directory.
-- **OpenCode Plugins**: Plugin declarations are visible via the read-only config mount, but plugin code from arbitrary host paths is not available inside the container unless you add a narrow read-only mount in `opencode-local.sh`. Plugins execute with the workspace and mirrored auth available, so only run plugin sources you trust.
+- **OpenCode Plugins**: Plugin declarations are visible through the read-only config mount. Local plugin code is available only when explicitly listed in `OPENCODE_LOCAL_PLUGIN_DIRS`, which mounts canonicalized checkouts read-only. Plugins execute with workspace and mirrored auth access, so only run source you trust.
 
 ### Security Non-Negotiables
 
@@ -320,8 +289,6 @@ You can customize the environment with environment variables or a local override
 
 - `OPENCODE_PROFILE`: Override the runtime mode (`secure` or `native`). The recommended daily workflow is `make run`, which uses `native`.
 - `OPENCODE_IMAGE`: Override the default Docker image.
-- `OPENCODE2_CONTAINER_HOME`: Override v2 container persistent state (default:
-  `$HOME/.local/share/opencode2-container`).
 - `OPENCODE_WORKSPACE`: Override the workspace directory to mount.
 - `OPENCODE_WEB_PORT`: Port for `opencode-container --web-server` (default: `4096`; overridden by `--web-port`). Starts publish only to `127.0.0.1` unless the explicit `--network-accessible` flag is supplied; credentials are scoped to its workspace-and-port container name under `$OPENCODE_CONTAINER_HOME/web-server/`.
 - `OPENCODE_OVERRIDES_FILE`: Optional JSON file to pass as `OPENCODE_CONFIG_CONTENT`.
@@ -329,16 +296,12 @@ You can customize the environment with environment variables or a local override
 - Standard proxy env vars (`HTTP_PROXY`, `HTTPS_PROXY`, `ALL_PROXY`, `NO_PROXY`, lowercase variants) are passed through for both runtime and `make build` when set.
 - `NODE_EXTRA_CA_CERTS`: Optional custom CA bundle path passed through for runtime and builds when set.
 - `GITHUB_TOKEN` / `GH_TOKEN`: Passed through to the container if set in the host environment.
+- `TYPESAFE_API_KEY`: Passed through to container and sandbox runtimes only when explicitly set in the launching environment.
+- `OPENCODE_LOCAL_PLUGIN_DIRS`: Colon-separated local plugin checkout directories. Each directory is mounted read-only at the same absolute path inside containment; exact `/` and `$HOME` mounts are rejected.
 - `OPENCODE_BUILD_EXTRA_APK_PACKAGES`: Optional local-only extra Alpine packages to install during `make build`.
 - `OPENCODE_BUILD_NO_CACHE`: Set to `1` to force `--no-cache` on `docker build`.
 - `IMAGE_NAME`: Override the image tag for build/run (default: `opencode-containment:latest`).
 - Build pin overrides: `RUST_TOOLCHAIN`, `UV_VERSION`, `UV_INSTALLER_SHA256`, `MARKSMAN_VERSION`, `MARKSMAN_SHA256_X86_64`, and `MARKSMAN_SHA256_AARCH64` can be set in `opencode-local.sh` before `make build`.
-- OpenCode 2 preview pin overrides: `OPENCODE2_VERSION`,
-  `OPENCODE2_TARBALL_SHA512_X86_64`, and
-  `OPENCODE2_TARBALL_SHA512_AARCH64` can be set together in
-  `opencode-local.sh` before `make build`; the committed defaults are beta
-  `0.0.0-beta-18743` and platform-specific SHA-512 digests. The legacy
-  `OPENCODE2_TARBALL_SHA512` override remains the x86_64 fallback.
 - `OPENCODE_SYNC_HOST_AUTH`: Set to `0` to skip data-dir auth/account/database seeding (default: `1`).
 - `OPENCODE_SYNC_CONFIG_CACHE`: Set to `0` to skip cache-dir seeding (default: `1`).
 - `OPENCODE_SYNC_CONFIG_STATE`: Set to `0` to skip runtime-state seeding (default: `1`).
@@ -353,10 +316,6 @@ You can customize the environment with environment variables or a local override
 - `OPENCODE_SANDBOX_MEMORY`: Pass a memory limit to `sbx run` (default: `8g`).
 - `OPENCODE_SANDBOX_CPUS`: Pass a CPU count to `sbx run` (default: `4`).
 - `OPENCODE_SANDBOX_TEMPLATE`: Override the sandbox template image.
-- `OPENCODE2_SANDBOX_TEMPLATE`: Override the v2 sandbox template image (the
-  default is `localhost/opencode-containment:latest`).
-- `OPENCODE2_SANDBOX_STATE_DIR`: Override v2 sandbox support state (default:
-  `${XDG_DATA_HOME:-$HOME/.local/share}/opencode2-sandbox`).
 
 ### XDG OpenCode State
 
@@ -382,48 +341,61 @@ container, and sandbox usage do not overwrite each other's session databases.
 
 ### OpenCode Plugins
 
-Plugin declarations in `opencode.json` (and v2 `cli.json`) are always visible
-inside the container because the host OpenCode config directory is mounted
-read-only. Plugin *code* is a separate question, and support depends on how the
-plugin is installed:
+OpenCode plugin declarations in the host config remain visible because the
+OpenCode config directory is mounted read-only.
 
-- **Published npm plugins work.** OpenCode installs them into the container's
-  own package cache (`packages/`), which is seeded from the host cache on first
-  init only. After installing a new plugin on the host, run `make sync-config`
-  to refresh the copy. With network access, the container can also install a
-  missing plugin at first use.
-- **`file://` plugins that point at host paths** (for example a local
-  development checkout such as `$HOME/github/opencode-quota`) do not load by
-  default: only the workspace and the specific config/data dirs are mounted,
-  never `$HOME`. To develop a local plugin inside containment, add a narrow
-  read-only mount in `opencode-local.sh` whose destination matches the exact
-  absolute path in the `file://` URL:
+Published npm plugins continue to use OpenCode's container-local package cache.
+For local `file://` plugin development, containment now has a first-class
+mount mechanism rather than requiring hand-written Docker arguments:
 
-  ```bash
-  # Destination must equal the host path used in the plugin's file:// URL.
-  DOCKER_ARGS+=(--volume "$HOME/github/opencode-quota:$HOME/github/opencode-quota:ro,Z")
-  ```
+```bash
+export OPENCODE_LOCAL_PLUGIN_DIRS="$HOME/github/opencode-jev-compactor"
+```
 
-  Mount the whole checkout, not just `dist/`, so bundled `node_modules`
-  resolve. The seeded `plugin-meta.json` path rewriting covers only the four
-  OpenCode XDG directories, not arbitrary host paths, so the mount must match
-  the URL exactly. This is a trust-boundary decision: only mount plugin
-  sources you actively develop and review, and keep them read-only.
-- **Config-dir plugins** (`config/opencode/plugins/*.js`) load read-only from
-  the config mount when they are self-contained. Their dependencies cannot be
-  installed inside the container because the config directory is read-only.
+Multiple trusted checkouts can be supplied as a colon-separated list:
 
-Plugins execute inside the OpenCode process in the container, with access to
-the mounted workspace and mirrored provider auth; treat plugin source as
-trusted code. Plugins built natively on the host may carry glibc-linked native
-modules that need rebuilding for the Alpine (musl) image. The OpenCode 2
-preview reads the same config files but does not support v1 plugins; a plugin
-must ship v2-compatible entrypoints.
+```bash
+export OPENCODE_LOCAL_PLUGIN_DIRS="$HOME/github/plugin-a:$HOME/github/plugin-b"
+```
 
-The sandbox backend does not share the host package cache and ignores
-`DOCKER_ARGS`, so `file://` plugins are not available there. For sandbox use,
-publish the plugin and allow the registry in `config/sbx-network-allow.txt`,
-or bake it into a custom sandbox template image.
+Each checkout is canonicalized and mounted **read-only at the same absolute
+path** inside the runtime. That lets the same config work natively and under
+containment:
+
+```jsonc
+{
+  "plugin": [
+    [
+      "file:///home/christian/github/opencode-jev-compactor",
+      { "enabled": true, "delivery": "observe" }
+    ]
+  ]
+}
+```
+
+The launcher rejects a local-plugin mount that resolves to `/` or exactly
+`$HOME`. Only list plugin source you trust: plugins execute in the OpenCode
+process and can access the mounted workspace and provider/session credentials.
+
+`OPENCODE_LOCAL_PLUGIN_DIRS` works for both backends. Docker/Podman adds a
+read-only bind mount. Docker Sandboxes adds each checkout as a read-only extra
+workspace when the sandbox is created. If the set of plugin directories changes
+for an existing named sandbox, remove/recreate that sandbox so the new mount set
+is present.
+
+Plugin dependencies should be portable to the Alpine/musl containment image.
+A host checkout containing glibc-only native modules may still need a
+container-compatible rebuild.
+
+For plugins that require a secret such as TypeSafe Jev, set it in the launching
+environment:
+
+```bash
+export TYPESAFE_API_KEY='...'
+```
+
+Containment passes `TYPESAFE_API_KEY` explicitly when it is set; it never
+mounts a secret file for this purpose.
 
 ### Local Override Hook
 
@@ -452,9 +424,9 @@ Both launchers accept CLI flags that mirror many of these environment variables.
 - `opencode-container --profile`, `--image`, `--workspace`, `--with-tool`, `--web-server`, `--web-port`, `--network-accessible`, `--sync-config`, `--help`
 - `opencode-sandbox --profile`, `--workspace`, `--name`, `--memory`, `--cpus`, `--template`, `--help`
 
-The container options are also available through `opencode2-container`; the
-sandbox launchers do not support `--with-tool`. v2 container web mode uses
-`opencode2 serve` internally.
+The historical `opencode2-container`, `opencode2-containment`, and
+`opencode2-sandbox` names are compatibility aliases for the current launchers.
+The sandbox launcher does not support `--with-tool`.
 
 ### Build and Version Strategy
 
@@ -488,8 +460,7 @@ To add personal packages without committing Dockerfile changes, set `OPENCODE_BU
 The image is built on the OpenCode base image (`ghcr.io/anomalyco/opencode:latest`, Alpine-based) and adds:
 
 - OpenCode CLI, neovim (with a prepared tree-sitter parser directory), marksman (Markdown LSP)
-- The stable `opencode` CLI plus the pinned OpenCode 2 preview binary
-  (`opencode2`), using verified x86_64 and arm64 musl packages
+- OpenCode from the current `ghcr.io/anomalyco/opencode:latest` base image
 - Rust toolchain (stable), `uv` (Python package manager), Python 3, Node.js, npm
 - Git, GitHub CLI, git-crypt, sops, openssh-client
 - Shell tools: bash, zsh, ripgrep, fd, fzf, bat, eza, zoxide, direnv
@@ -500,7 +471,7 @@ tmux is not installed in the container. It runs on the host and you attach to th
 ## Repository Layout
 
 ```
-bin/            launchers (stable and opencode2 container/sandbox commands)
+bin/            container/sandbox launchers plus legacy opencode2 compatibility aliases
 scripts/        build helper, entrypoint, nvim wrapper, sandbox policy setup
 config/         sandbox network allowlist
 demo/           prompt injection demo
@@ -524,11 +495,11 @@ SECURITY_REPORT.md         security threat model and mitigations
 - `make run-native`: Run the container interactively (native profile)
 - `make run-secure`: Run the container with the secure profile
 - `make run-sandbox`: Run the `sandbox` backend
-- `make run-opencode2`: Run the OpenCode 2 preview container backend
-- `make run-opencode2-sandbox`: Run the OpenCode 2 preview sandbox backend
+- `make run-opencode2`: Deprecated compatibility alias for the current container backend
+- `make run-opencode2-sandbox`: Deprecated compatibility alias for the current sandbox backend
 - `make sync-config`: Force-refresh OpenCode cache/state from host into container persistent state without launching a container
 - `make clean-sandbox-smoke`: Remove a sandbox named `opencode-containment-smoke` (a convention used for manual sandbox smoke testing; no Makefile target auto-creates it)
-- `make shell-install`: Install stable and v2 launchers to `~/.local/bin`
+- `make shell-install`: Install current launchers and compatibility aliases to `~/.local/bin`
 - `make clean`: Remove generated files and persistent state
 
 ## Prerequisites
@@ -541,9 +512,8 @@ SECURITY_REPORT.md         security threat model and mitigations
 
 - **Image is stale or tools are outdated**: Run `make update` to pull the latest base image and rebuild without cache.
 - **Plugins or model state not showing up**: Run `make sync-config` to force-refresh host OpenCode cache/state into container persistent state.
-- **Plugin failed to load / missing module**: A `file://` plugin entry pointing at a host path outside the workspace does not exist inside the container. Mount that exact path read-only via `DOCKER_ARGS` in `opencode-local.sh` (the mount destination must equal the URL path), or install the plugin as a published npm package and run `make sync-config`. See the "OpenCode Plugins" section.
+- **Plugin failed to load / missing module**: Put the checkout in `OPENCODE_LOCAL_PLUGIN_DIRS` so containment mounts the exact `file://` path read-only. For an existing Docker Sandbox, recreate the sandbox after changing the plugin directory set.
 - **Plugin loads on the host but not in the container**: Its `node_modules` may contain glibc-linked native modules from the host. Rebuild the plugin's dependencies for Alpine/musl, or install the published npm package instead of a local `file://` path.
-- **v2 launcher reports a plugin error that stable does not**: The OpenCode 2 preview does not support v1 plugins. The plugin needs a v2-compatible entrypoint.
 - **Docker/image/auth setup issues**: Run `make doctor` to check prerequisites, image, SSH agent, and OpenCode host state.
 - **Sandbox won't start**: Run `make doctor-sandbox` to check `sbx`, daemon status, KVM access, and filesystem tools. Confirm `/dev/kvm` is accessible and both `mkfs.ext4` and `mkfs.erofs` resolve in your PATH.
 - **Sandbox network blocked**: Add your provider's domain to `config/sbx-network-allow.txt` and run `make setup-sandbox-policy`.
