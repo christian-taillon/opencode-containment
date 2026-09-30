@@ -279,6 +279,2705 @@ pass_env_if_set() {
     done
 }
 
+append_local_plugin_mounts() {
+    local spec resolved real_home
+    [[ -n "${OPENCODE_PLUGIN_PATHS:-}" ]] || return 0
+    real_home="$(resolve_path "$HOME")" || return 1
+
+    IFS=':' read -r -a plugin_paths <<< "$OPENCODE_PLUGIN_PATHS"
+    for spec in "${plugin_paths[@]}"; do
+        [[ -n "$spec" ]] || continue
+        if [[ "$spec" != /* || "$spec" == *
+sanitize_web_container_name() {
+    local raw="$1"
+    local sanitized
+
+    sanitized="$(printf '%s' "$raw" | tr '[:upper:]' '[:lower:]' | tr -cs '[:alnum:]._-' '-')"
+    sanitized="${sanitized#-}"
+    sanitized="${sanitized%-}"
+    sanitized="${sanitized:0:40}"
+    if [[ -z "$sanitized" ]]; then
+        sanitized="workspace"
+    fi
+    printf '%s' "$sanitized"
+}
+
+DOCKER_ARGS=()
+
+LOCAL_HOOK="$SCRIPT_DIR/opencode-local.sh"
+if [[ -f "$LOCAL_HOOK" ]]; then
+    # shellcheck disable=SC1090
+    source "$LOCAL_HOOK"
+fi
+
+# The v2 wrappers select this mode with a private positional marker. Resolve it
+# after the local hook so an environment variable or local default cannot cause
+# a stable launcher to execute the preview binary (or vice versa).
+LAUNCHER_MODE="stable"
+if [[ "${1:-}" == "--__opencode2" ]]; then
+    LAUNCHER_MODE="v2"
+    shift
+fi
+if [[ "$LAUNCHER_MODE" == "v2" ]]; then
+    LAUNCHER_COMMAND="opencode2-container"
+    OPENCODE_EXECUTABLE="opencode2"
+    WEB_NAME_PREFIX="opencode2-web-"
+    WEB_HEALTH_PATH="/api/health"
+    OPENCODE_CONTAINER_HOME="${OPENCODE2_CONTAINER_HOME:-${OPENCODE_CONTAINER_HOME:-$HOME/.local/share/opencode2-container}}"
+else
+    LAUNCHER_COMMAND="opencode-container"
+    OPENCODE_EXECUTABLE="opencode"
+    WEB_NAME_PREFIX="opencode-web-"
+    WEB_HEALTH_PATH="/global/health"
+    OPENCODE_CONTAINER_HOME="${OPENCODE_CONTAINER_HOME:-$HOME/.local/share/opencode-container}"
+fi
+
+# Default values (env-overridable)
+PROFILE="${OPENCODE_PROFILE:-secure}"
+IMAGE="${OPENCODE_IMAGE:-opencode-containment:latest}"
+WORKSPACE="${OPENCODE_WORKSPACE:-$PWD}"
+OPENCODE_SYNC_HOST_AUTH="${OPENCODE_SYNC_HOST_AUTH:-1}"
+OPENCODE_SYNC_CONFIG_CACHE="${OPENCODE_SYNC_CONFIG_CACHE:-1}"
+OPENCODE_SYNC_CONFIG_STATE="${OPENCODE_SYNC_CONFIG_STATE:-1}"
+OPENCODE_SYNC_CONFIG_FORCE="${OPENCODE_SYNC_CONFIG_FORCE:-0}"
+WEB_PORT="${OPENCODE_WEB_PORT:-4096}"
+
+# Host OpenCode directories across all four XDG base categories.
+# OPENCODE_HOST_STATE_DIR is retained as the data-dir override for backwards
+# compatibility (it historically pointed at ~/.local/share/opencode, which is
+# XDG_DATA_HOME, not XDG_STATE_HOME).
+HOST_CONFIG_DIR="${OPENCODE_CONFIG_DIR:-${XDG_CONFIG_HOME:-$HOME/.config}/opencode}"
+HOST_DATA_DIR="${OPENCODE_HOST_STATE_DIR:-${XDG_DATA_HOME:-$HOME/.local/share}/opencode}"
+HOST_CACHE_DIR="${OPENCODE_HOST_CACHE_DIR:-${XDG_CACHE_HOME:-$HOME/.cache}/opencode}"
+HOST_STATE_DIR="${OPENCODE_HOST_RUNTIME_STATE_DIR:-${XDG_STATE_HOME:-$HOME/.local/state}/opencode}"
+
+# Container persistent state directories (host-side paths, bind-mounted in).
+CONTAINER_DATA_DIR="$OPENCODE_CONTAINER_HOME/local/share/opencode"
+CONTAINER_CACHE_DIR="$OPENCODE_CONTAINER_HOME/cache/opencode"
+CONTAINER_STATE_DIR="$OPENCODE_CONTAINER_HOME/local/state/opencode"
+# Container runtime paths (what the container sees at runtime).
+CONTAINER_HOME="/home/opencode"
+CONTAINER_CONFIG_PATH="$CONTAINER_HOME/.config/opencode"
+CONTAINER_DATA_PATH="$CONTAINER_HOME/.local/share/opencode"
+CONTAINER_CACHE_PATH="$CONTAINER_HOME/.cache/opencode"
+CONTAINER_STATE_PATH="$CONTAINER_HOME/.local/state/opencode"
+WEB_CREDENTIALS_DIR="$OPENCODE_CONTAINER_HOME/web-server"
+WEB_ENTRYPOINT="$SCRIPT_DIR/scripts/web-server-entrypoint.sh"
+WEB_OWNERSHIP_LABEL_KEY="io.opencode-containment.web-server"
+WEB_OWNERSHIP_LABEL_VALUE="true"
+WEB_LEGACY_LABEL_KEY="io.opencode-containment.web-launch-id"
+TOOLS_CONTAINER_PATH="/opt/opencode-tools"
+# Keep the image's normal fixed PATH while avoiding propagation of the host
+# PATH. The Dockerfile prepends cargo/bin and local/bin to this Alpine base
+# PATH; the selected tools are intentionally first so their names are usable
+# without an absolute path.
+CONTAINER_DEFAULT_PATH="/usr/local/cargo/bin:/usr/local/bin:/usr/local/sbin:/usr/sbin:/usr/bin:/sbin:/bin"
+
+show_help() {
+    cat <<EOF
+Usage: $LAUNCHER_COMMAND [OPTIONS] [-- ARGS...]
+       $LAUNCHER_COMMAND [COMMON OPTIONS] --web-server [start|stop|status] [--web-port PORT] [--network-accessible]
+
+Options:
+  --profile PROFILE   Profile to use: secure or native (default: OPENCODE_PROFILE or secure)
+  --image IMAGE       Container image to use (default: OPENCODE_IMAGE or opencode-containment:latest)
+  --workspace DIR     Workspace directory to mount (default: OPENCODE_WORKSPACE or current directory)
+  --with-tool COMMAND_OR_PATH
+                       Snapshot and expose one host executable for this launch;
+                       may be repeated, but must appear before '--'
+  --web-server        Manage OpenCode's web server in a detached Docker container
+  --web-port PORT     Port for the web server (default: OPENCODE_WEB_PORT or 4096)
+  --network-accessible
+                       Publish a started web server to the LAN (start only)
+  --sync-config       Re-seed OpenCode cache/state from host (forces overwrite), then exit
+  --help              Show this help message
+
+Behavior:
+  Without '--', arguments are passed to '$OPENCODE_EXECUTABLE'.
+     Example: $LAUNCHER_COMMAND auth ls
+  With '--', arguments are executed as a raw container command.
+    Example: $LAUNCHER_COMMAND -- bash
+  --with-tool resolves bare names through the host shell's external-command PATH,
+  then snapshots each selected file read-only under $TOOLS_CONTAINER_PATH.
+  The namespace is prepended to the container's fixed PATH; it does not pass
+  the host PATH, import additional symlink targets, or import host dependencies.
+  --with-tool requires a container launch and cannot be combined with
+  --web-server or --sync-config.
+  --web-server starts the server by default; its commands are start, stop, and status.
+  --web-server cannot be combined with --with-tool, OpenCode, or raw command arguments.
+
+Variant:
+  This launcher uses '$OPENCODE_EXECUTABLE'. The opencode2 launcher is a beta
+  preview and uses 'serve' plus /api/health for web-server mode.
+
+Profiles:
+  secure: Essential mounts only (opencode config, git config, workspace, persistent cache/state, SSH agent)
+  native: secure + nvim config/plugins (read-only)
+
+OpenCode state categories (host -> container):
+  Config (XDG_CONFIG_HOME):  read-only mount, shared with host
+  Data   (XDG_DATA_HOME):     auth/account/mcp-auth refreshed each launch;
+                             opencode.db seeded first-init only
+  Cache  (XDG_CACHE_HOME):   plugins, models.json, quota caches seeded first-init
+  State  (XDG_STATE_HOME):    model.json, kv.json, plugin-meta.json seeded first-init
+                             (plugin-meta.json host paths rewritten to container home)
+
+Local overrides (optional, gitignored):
+  opencode-local.sh    Shell hook sourced before docker run (env vars, Docker args, config)
+  See opencode-local.example.sh for details.
+
+Sync env vars:
+  OPENCODE_SYNC_HOST_AUTH=0       skip data-dir auth/account/db seeding
+  OPENCODE_SYNC_CONFIG_CACHE=0    skip cache-dir seeding (plugins, models, quota)
+  OPENCODE_SYNC_CONFIG_STATE=0    skip state-dir seeding (model/kv/plugin-meta)
+  OPENCODE_SYNC_CONFIG_FORCE=1    re-seed cache/state overwriting container copies
+  OPENCODE_CONFIG_DIR             override host XDG_CONFIG_HOME/opencode path
+  OPENCODE_HOST_STATE_DIR         override host data dir (legacy name; XDG_DATA_HOME/opencode)
+  OPENCODE_HOST_CACHE_DIR         override host cache dir (XDG_CACHE_HOME/opencode)
+  OPENCODE_HOST_RUNTIME_STATE_DIR override host state dir (XDG_STATE_HOME/opencode)
+EOF
+}
+
+# Parse arguments
+ARGS=()
+WITH_TOOLS=()
+RAW_COMMAND=0
+SYNC_CONFIG_ONLY=0
+WEB_SERVER=0
+WEB_PORT_SET=0
+WEB_SERVER_COMMAND="start"
+WEB_SERVER_COMMAND_SET=0
+WEB_NETWORK_ACCESSIBLE=0
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --profile)
+            PROFILE="$2"
+            shift 2
+            ;;
+        --image)
+            IMAGE="$2"
+            shift 2
+            ;;
+        --workspace)
+            WORKSPACE="$2"
+            shift 2
+            ;;
+        --with-tool)
+            if [[ $# -lt 2 || "$2" == --* ]]; then
+                echo "Error: --with-tool requires a command or path value." >&2
+                exit 1
+            fi
+            WITH_TOOLS+=("$2")
+            shift 2
+            ;;
+        --web-server)
+            if [[ "$WEB_SERVER" == "1" ]]; then
+                echo "Error: --web-server may only be specified once." >&2
+                exit 1
+            fi
+            WEB_SERVER=1
+            shift
+            ;;
+        --web-port)
+            if [[ $# -lt 2 || "$2" == --* ]]; then
+                echo "Error: --web-port requires a port value." >&2
+                exit 1
+            fi
+            WEB_PORT="$2"
+            WEB_PORT_SET=1
+            shift 2
+            ;;
+        --network-accessible)
+            WEB_NETWORK_ACCESSIBLE=1
+            shift
+            ;;
+        --sync-config)
+            OPENCODE_SYNC_CONFIG_FORCE=1
+            SYNC_CONFIG_ONLY=1
+            shift
+            ;;
+        --help)
+            show_help
+            exit 0
+            ;;
+        --)
+            RAW_COMMAND=1
+            shift
+            ARGS+=("$@")
+            break
+            ;;
+        *)
+            if [[ "$WEB_SERVER" == "1" ]]; then
+                if [[ "$WEB_SERVER_COMMAND_SET" == "0" ]]; then
+                    case "$1" in
+                        start|stop|status)
+                            WEB_SERVER_COMMAND="$1"
+                            WEB_SERVER_COMMAND_SET=1
+                            shift
+                            ;;
+                        *)
+                            echo "Error: Unknown web server command '$1'. Use start, stop, or status." >&2
+                            exit 1
+                            ;;
+                    esac
+                    continue
+                fi
+                echo "Error: --web-server $WEB_SERVER_COMMAND cannot be combined with additional arguments." >&2
+                exit 1
+            fi
+            ARGS+=("$1")
+            shift
+            ;;
+    esac
+done
+
+if [[ "$WEB_SERVER" == "1" ]]; then
+    if [[ "$SYNC_CONFIG_ONLY" == "1" ]]; then
+        echo "Error: --web-server cannot be combined with --sync-config." >&2
+        exit 1
+    fi
+    if ((${#WITH_TOOLS[@]} != 0)); then
+        echo "Error: --web-server cannot be combined with --with-tool." >&2
+        exit 1
+    fi
+    if [[ "$RAW_COMMAND" == "1" || ${#ARGS[@]} -ne 0 ]]; then
+        echo "Error: --web-server cannot be combined with OpenCode or raw command arguments." >&2
+        exit 1
+    fi
+    if [[ "$WEB_NETWORK_ACCESSIBLE" == "1" && "$WEB_SERVER_COMMAND" != "start" ]]; then
+        echo "Error: --network-accessible is only valid with --web-server start." >&2
+        exit 1
+    fi
+    if ! [[ "$WEB_PORT" =~ ^[1-9][0-9]{0,4}$ ]] || ((10#$WEB_PORT > 65535)); then
+        echo "Error: Web server port must be an integer from 1 to 65535." >&2
+        exit 1
+    fi
+elif [[ "$WEB_PORT_SET" == "1" || "$WEB_NETWORK_ACCESSIBLE" == "1" ]]; then
+    if [[ "$WEB_PORT_SET" == "1" ]]; then
+        echo "Error: --web-port requires --web-server." >&2
+    else
+        echo "Error: --network-accessible requires --web-server start." >&2
+    fi
+    exit 1
+fi
+
+if [[ "$SYNC_CONFIG_ONLY" == "1" && ${#WITH_TOOLS[@]} -ne 0 ]]; then
+    echo "Error: --with-tool cannot be combined with --sync-config." >&2
+    exit 1
+fi
+
+# Validate start/run workspaces to prevent host OS breakage. Lifecycle commands
+# only address already-created Docker resources, so they retain the supplied
+# canonical path even if it no longer exists and never require the caller to be
+# in or below that workspace.
+# --sync-config only re-seeds cache/state and never launches a container, so it
+# does not need a valid workspace or Docker.
+if [[ "${SYNC_CONFIG_ONLY:-0}" != "1" ]]; then
+    if [[ "$WEB_SERVER" == "1" && "$WEB_SERVER_COMMAND" != "start" ]]; then
+        REAL_WORKSPACE="$(resolve_web_lifecycle_workspace "$WORKSPACE")" || {
+            echo "Error: Could not resolve web server workspace path: $WORKSPACE" >&2
+            exit 1
+        }
+    else
+        REAL_HOME="$(resolve_path "$HOME")"
+        if [[ ! -e "$WORKSPACE" ]]; then
+            echo "Error: Workspace path does not exist: $WORKSPACE" >&2
+            exit 1
+        fi
+        if [[ ! -d "$WORKSPACE" ]]; then
+            echo "Error: Workspace path is not a directory: $WORKSPACE" >&2
+            exit 1
+        fi
+        REAL_WORKSPACE="$(resolve_path "$WORKSPACE")"
+        START_DIR="$(resolve_path "$PWD")"
+        if [[ "$REAL_WORKSPACE" == "/" || "$REAL_WORKSPACE" == "$REAL_HOME" ]]; then
+            echo "Error: For security reasons, mounting '/' or '$HOME' as the workspace is not allowed." >&2
+            exit 1
+        fi
+        if [[ "$REAL_WORKSPACE" != "$START_DIR" && "$REAL_WORKSPACE" != "$START_DIR"/* ]]; then
+            echo "Error: Workspace must be the current directory or one of its subdirectories." >&2
+            exit 1
+        fi
+    fi
+
+    # Check prerequisites
+    if ! command -v docker >/dev/null 2>&1; then
+        echo "Error: docker is not installed or not in PATH." >&2
+        exit 1
+    fi
+
+    if [[ "$WEB_SERVER" == "1" ]]; then
+        workspace_hash="$(printf '%s' "$REAL_WORKSPACE" | cksum)"
+        workspace_hash="${workspace_hash%% *}"
+        WEB_CONTAINER_NAME="${WEB_NAME_PREFIX}$(sanitize_web_container_name "$(basename "$REAL_WORKSPACE")")-${workspace_hash}-${WEB_PORT}"
+        WEB_NETWORK_NAME="${WEB_CONTAINER_NAME}-network"
+        WEB_CREDENTIALS_FILE="$WEB_CREDENTIALS_DIR/${WEB_CONTAINER_NAME}.credentials"
+    fi
+fi
+
+# Copy a file from host to container state.
+copy_file() {
+    local src="$1" dst="$2"
+    [[ -f "$src" ]] || return 0
+    cp -f -- "$src" "$dst"
+}
+
+# Copy a file from host to container state only when the destination is
+# missing (first-init semantics).
+copy_first_init() {
+    local src="$1" dst="$2"
+    [[ -f "$src" ]] || return 0
+    [[ -e "$dst" || -L "$dst" ]] || cp -f -- "$src" "$dst"
+}
+
+# Copy cache/state files from host to container state. These are first-init by
+# default, with OPENCODE_SYNC_CONFIG_FORCE=1 providing an explicit refresh.
+copy_config_file() {
+    local src="$1" dst="$2"
+    [[ -f "$src" ]] || return 0
+    if [[ "$OPENCODE_SYNC_CONFIG_FORCE" != "1" && ( -e "$dst" || -L "$dst" ) ]]; then
+        return 0
+    fi
+    cp -f -- "$src" "$dst"
+}
+
+directory_is_empty() (
+    local dir="$1"
+    local entries=()
+    shopt -s dotglob nullglob
+    entries=("$dir"/*)
+    ((${#entries[@]} == 0))
+)
+
+# Copy a directory tree from host to container state, but only when the
+# destination is empty (first-init semantics). Force refreshes replace the
+# destination contents rather than nesting another source directory inside it.
+copy_tree_first_init() {
+    local src="$1" dst="$2"
+    [[ -d "$src" ]] || return 0
+    if [[ "$OPENCODE_SYNC_CONFIG_FORCE" == "1" ]]; then
+        rm -rf -- "$dst"
+        mkdir -p "$dst"
+        cp -a -- "$src/." "$dst/"
+        return 0
+    fi
+
+    mkdir -p "$dst"
+    # Only seed when the destination is empty so container-created state wins.
+    if directory_is_empty "$dst"; then
+        cp -a -- "$src/." "$dst/"
+    fi
+}
+
+# Copy plugin metadata on first-init, rewriting the four host OpenCode XDG
+# paths so plugin fingerprints point at the isolated container state.
+copy_plugin_meta() {
+    local src="$1" dst="$2" tmp line
+    [[ -f "$src" ]] || return 0
+    if [[ "$OPENCODE_SYNC_CONFIG_FORCE" != "1" && ( -e "$dst" || -L "$dst" ) ]]; then
+        return 0
+    fi
+
+    tmp="$dst.tmp"
+    rm -f -- "$tmp"
+    if command -v jq >/dev/null 2>&1; then
+        if ! jq \
+            --arg host_config "$HOST_CONFIG_DIR" \
+            --arg host_data "$HOST_DATA_DIR" \
+            --arg host_cache "$HOST_CACHE_DIR" \
+            --arg host_state "$HOST_STATE_DIR" \
+            --arg container_config "$CONTAINER_CONFIG_PATH" \
+            --arg container_data "$CONTAINER_DATA_PATH" \
+            --arg container_cache "$CONTAINER_CACHE_PATH" \
+            --arg container_state "$CONTAINER_STATE_PATH" \
+            '
+            def rewrite_paths:
+              if type == "string" then
+                split($host_config) | join($container_config) |
+                split($host_data) | join($container_data) |
+                split($host_cache) | join($container_cache) |
+                split($host_state) | join($container_state)
+              elif type == "array" then map(rewrite_paths)
+              elif type == "object" then with_entries(.value |= rewrite_paths)
+              else . end;
+            rewrite_paths
+            ' "$src" > "$tmp"; then
+            rm -f -- "$tmp"
+            return 1
+        fi
+    else
+        # OpenCode writes ordinary JSON paths. Keep this fallback dependency-free
+        # while still replacing literal paths in plugin specs, targets, and themes.
+        while IFS= read -r line || [[ -n "$line" ]]; do
+            line="${line//"$HOST_CONFIG_DIR"/"$CONTAINER_CONFIG_PATH"}"
+            line="${line//"$HOST_DATA_DIR"/"$CONTAINER_DATA_PATH"}"
+            line="${line//"$HOST_CACHE_DIR"/"$CONTAINER_CACHE_PATH"}"
+            line="${line//"$HOST_STATE_DIR"/"$CONTAINER_STATE_PATH"}"
+            printf '%s\n' "$line" >> "$tmp"
+        done < "$src"
+    fi
+    mv -f -- "$tmp" "$dst"
+}
+
+stat_file_mode() {
+    local path="$1"
+
+    case "$path" in
+        -*) path="./$path" ;;
+    esac
+    if stat -f '%Lp' "$path" >/dev/null 2>&1; then
+        stat -f '%Lp' "$path"
+    else
+        stat -c '%a' -- "$path"
+    fi
+}
+
+stat_file_size() {
+    local path="$1"
+
+    case "$path" in
+        -*) path="./$path" ;;
+    esac
+    if stat -f '%z' "$path" >/dev/null 2>&1; then
+        stat -f '%z' "$path"
+    else
+        stat -c '%s' -- "$path"
+    fi
+}
+
+read_web_credentials() {
+    local mode size expected_size username_line password_line extra_line
+
+    if [[ -L "$WEB_CREDENTIALS_FILE" || ! -f "$WEB_CREDENTIALS_FILE" ]]; then
+        echo "Error: Web server credentials path is not a regular file: $WEB_CREDENTIALS_FILE" >&2
+        return 1
+    fi
+    if [[ ! -O "$WEB_CREDENTIALS_FILE" ]]; then
+        echo "Error: Web server credentials file is not owned by the current user: $WEB_CREDENTIALS_FILE" >&2
+        return 1
+    fi
+    mode="$(stat_file_mode "$WEB_CREDENTIALS_FILE")" || return 1
+    if [[ "$mode" != "600" ]]; then
+        echo "Error: Web server credentials file must have mode 0600: $WEB_CREDENTIALS_FILE" >&2
+        return 1
+    fi
+    # The fixed format is variant-specific, including both required trailing
+    # newlines. v2's server uses the fixed Basic Auth username `opencode`.
+    size="$(stat_file_size "$WEB_CREDENTIALS_FILE")" || return 1
+    if [[ "$LAUNCHER_MODE" == "v2" ]]; then
+        expected_size=124
+    else
+        expected_size=141
+    fi
+    if [[ "$size" != "$expected_size" ]]; then
+        echo "Error: Web server credentials file is malformed: $WEB_CREDENTIALS_FILE" >&2
+        return 1
+    fi
+
+    if ! exec 3< "$WEB_CREDENTIALS_FILE" \
+        || ! IFS= read -r username_line <&3 \
+        || ! IFS= read -r password_line <&3; then
+        exec 3<&- || true
+        echo "Error: Web server credentials file is malformed: $WEB_CREDENTIALS_FILE" >&2
+        return 1
+    fi
+    if IFS= read -r extra_line <&3; then
+        exec 3<&-
+        echo "Error: Web server credentials file is malformed: $WEB_CREDENTIALS_FILE" >&2
+        return 1
+    fi
+    exec 3<&-
+
+    if [[ "$LAUNCHER_MODE" == "v2" ]]; then
+        if [[ "$username_line" != "OPENCODE_SERVER_USERNAME=opencode" ]]; then
+            echo "Error: Web server credentials file is malformed: $WEB_CREDENTIALS_FILE" >&2
+            return 1
+        fi
+    elif ! [[ "$username_line" =~ ^OPENCODE_SERVER_USERNAME=(opencode-[0-9a-f]{16})$ ]]; then
+        echo "Error: Web server credentials file is malformed: $WEB_CREDENTIALS_FILE" >&2
+        return 1
+    fi
+    if ! [[ "$password_line" =~ ^OPENCODE_SERVER_PASSWORD=([0-9a-f]{64})$ ]]; then
+        echo "Error: Web server credentials file is malformed: $WEB_CREDENTIALS_FILE" >&2
+        return 1
+    fi
+
+    WEB_USERNAME="${username_line#OPENCODE_SERVER_USERNAME=}"
+    WEB_PASSWORD="${password_line#OPENCODE_SERVER_PASSWORD=}"
+}
+
+prepare_web_credentials_directory() {
+    local mode
+
+    if [[ -L "$WEB_CREDENTIALS_DIR" || ( -e "$WEB_CREDENTIALS_DIR" && ! -d "$WEB_CREDENTIALS_DIR" ) ]]; then
+        echo "Error: Web server credentials directory is not a directory: $WEB_CREDENTIALS_DIR" >&2
+        return 1
+    fi
+    if ! (umask 077; mkdir -p -- "$WEB_CREDENTIALS_DIR"); then
+        echo "Error: Could not create web server credentials directory: $WEB_CREDENTIALS_DIR" >&2
+        return 1
+    fi
+    if [[ -L "$WEB_CREDENTIALS_DIR" || ! -d "$WEB_CREDENTIALS_DIR" || ! -O "$WEB_CREDENTIALS_DIR" ]]; then
+        echo "Error: Web server credentials directory is insecure: $WEB_CREDENTIALS_DIR" >&2
+        return 1
+    fi
+    mode="$(stat_file_mode "$WEB_CREDENTIALS_DIR")" || return 1
+    if [[ "$mode" != "700" ]]; then
+        echo "Error: Web server credentials directory must have mode 0700: $WEB_CREDENTIALS_DIR" >&2
+        return 1
+    fi
+}
+
+create_web_credentials() {
+    local username password
+
+    prepare_web_credentials_directory || return 1
+    if [[ -e "$WEB_CREDENTIALS_FILE" || -L "$WEB_CREDENTIALS_FILE" ]]; then
+        read_web_credentials
+        return
+    fi
+
+    if [[ "$LAUNCHER_MODE" == "v2" ]]; then
+        username="opencode"
+    else
+        username="opencode-$(od -An -N 8 -tx1 /dev/urandom | tr -d ' \n')"
+    fi
+    password="$(od -An -N 32 -tx1 /dev/urandom | tr -d ' \n')"
+    if ! [[ "$username" == "opencode" || "$username" =~ ^opencode-[0-9a-f]{16}$ ]] \
+        || ! [[ "$password" =~ ^[0-9a-f]{64}$ ]]; then
+        echo "Error: Could not generate web server credentials." >&2
+        return 1
+    fi
+
+    WEB_CREDENTIALS_TEMP_FILE="$WEB_CREDENTIALS_DIR/.credentials.$WEB_LAUNCH_TOKEN"
+    if ! (umask 077; set -C; : > "$WEB_CREDENTIALS_TEMP_FILE"); then
+        echo "Error: Could not create temporary web server credentials." >&2
+        return 1
+    fi
+    if ! chmod 600 -- "$WEB_CREDENTIALS_TEMP_FILE" \
+        || ! printf 'OPENCODE_SERVER_USERNAME=%s\nOPENCODE_SERVER_PASSWORD=%s\n' "$username" "$password" > "$WEB_CREDENTIALS_TEMP_FILE"; then
+        rm -f -- "$WEB_CREDENTIALS_TEMP_FILE"
+        WEB_CREDENTIALS_TEMP_FILE=""
+        echo "Error: Could not write web server credentials." >&2
+        return 1
+    fi
+
+    # link(2) refuses to overwrite an existing path, so this publishes the file
+    # atomically. If another launcher won the race, validate and use its file.
+    if ln -- "$WEB_CREDENTIALS_TEMP_FILE" "$WEB_CREDENTIALS_FILE" 2>/dev/null; then
+        rm -f -- "$WEB_CREDENTIALS_TEMP_FILE"
+        WEB_CREDENTIALS_TEMP_FILE=""
+    else
+        rm -f -- "$WEB_CREDENTIALS_TEMP_FILE"
+        WEB_CREDENTIALS_TEMP_FILE=""
+        if [[ -e "$WEB_CREDENTIALS_FILE" || -L "$WEB_CREDENTIALS_FILE" ]]; then
+            read_web_credentials
+            return
+        fi
+        echo "Error: Could not publish web server credentials: $WEB_CREDENTIALS_FILE" >&2
+        return 1
+    fi
+
+    read_web_credentials
+}
+
+create_web_network() {
+    local inspect_result
+
+    # Never attach a new server to a pre-existing network, including one that
+    # happens to carry our labels. It may be a stale or concurrently-created
+    # resource, and its endpoints cannot be safely attributed to this launch.
+    if inspect_web_network; then
+        echo "Error: Web server network '$WEB_NETWORK_NAME' already exists." >&2
+        return 1
+    else
+        inspect_result=$?
+    fi
+    case "$inspect_result" in
+        1) ;;
+        2)
+            echo "Error: Refusing to use unowned web server network '$WEB_NETWORK_NAME'." >&2
+            return 1
+            ;;
+        *)
+            return 1
+            ;;
+    esac
+
+    # Cleanup re-checks this per-launch label, so a signal after Docker creates
+    # the network cannot leave this invocation's network orphaned.
+    if docker network create \
+        --driver bridge \
+        --label "$WEB_OWNERSHIP_LABEL_KEY=$WEB_OWNERSHIP_LABEL_VALUE" \
+        --label "$WEB_LEGACY_LABEL_KEY=$WEB_LAUNCH_TOKEN" \
+        "$WEB_NETWORK_NAME" >/dev/null; then
+        return
+    fi
+
+    # A failed create can race with another creator. Do not adopt the resulting
+    # network, even when its labels look owned.
+    if inspect_web_network; then
+        echo "Error: Web server network '$WEB_NETWORK_NAME' already exists." >&2
+    else
+        inspect_result=$?
+        case "$inspect_result" in
+            1)
+                echo "Error: Could not create web server network '$WEB_NETWORK_NAME'." >&2
+                ;;
+            2)
+                echo "Error: Refusing to use unowned web server network '$WEB_NETWORK_NAME'." >&2
+                ;;
+        esac
+    fi
+    return 1
+}
+
+web_server_http_status() {
+    local status
+
+    if status="$(curl --disable --silent --location --noproxy 127.0.0.1 --output /dev/null --write-out '%{http_code}' --max-time 2 "$@")"; then
+        printf '%s\n' "$status"
+    else
+        printf '%s\n' "$status"
+        return 1
+    fi
+}
+
+wait_for_web_server() {
+    local url="$1" unauthenticated_status="unavailable" authenticated_status="not attempted" attempt
+
+    WEB_CURL_AUTH_FILE="$WEB_CREDENTIALS_DIR/.curl-auth.$WEB_LAUNCH_TOKEN"
+    if ! (umask 077; set -C; : > "$WEB_CURL_AUTH_FILE"); then
+        echo "Error: Could not create temporary authentication configuration." >&2
+        return 1
+    fi
+    if ! printf 'user = "%s:%s"\n' "$WEB_USERNAME" "$WEB_PASSWORD" > "$WEB_CURL_AUTH_FILE"; then
+        rm -f -- "$WEB_CURL_AUTH_FILE"
+        WEB_CURL_AUTH_FILE=""
+        echo "Error: Could not write temporary authentication configuration." >&2
+        return 1
+    fi
+
+    for ((attempt = 1; attempt <= 15; attempt++)); do
+        unauthenticated_status="$(web_server_http_status "$url" || true)"
+        if [[ "$unauthenticated_status" == "401" ]]; then
+            authenticated_status="$(web_server_http_status --config "$WEB_CURL_AUTH_FILE" "$url" || true)"
+            if [[ "$authenticated_status" =~ ^2[0-9]{2}$ ]]; then
+                rm -f -- "$WEB_CURL_AUTH_FILE"
+                WEB_CURL_AUTH_FILE=""
+                return 0
+            fi
+        fi
+        sleep 1
+    done
+
+    rm -f -- "$WEB_CURL_AUTH_FILE"
+    WEB_CURL_AUTH_FILE=""
+    echo "Error: Web server readiness/authentication check failed (unauthenticated status: $unauthenticated_status; authenticated status: $authenticated_status)." >&2
+    return 1
+}
+
+create_web_launch_token() {
+    WEB_LAUNCH_TOKEN="$(od -An -N 16 -tx1 /dev/urandom | tr -d ' \n')"
+    if ! [[ "$WEB_LAUNCH_TOKEN" =~ ^[0-9a-f]{32}$ ]]; then
+        echo "Error: Could not create web server launch token." >&2
+        return 1
+    fi
+}
+
+capture_failed_web_container() {
+    local inspected_container candidate_id candidate_token
+
+    inspected_container="$(docker container inspect \
+        --format "{{.Id}} {{index .Config.Labels \"$WEB_LEGACY_LABEL_KEY\"}}" \
+        "$WEB_CONTAINER_NAME" 2>/dev/null || true)"
+    candidate_id="${inspected_container%% *}"
+    candidate_token="${inspected_container#* }"
+    if [[ "$candidate_id" =~ ^[0-9a-f]{12,64}$ && "$candidate_token" == "$WEB_LAUNCH_TOKEN" ]]; then
+        WEB_CONTAINER_ID="$candidate_id"
+    fi
+}
+
+web_network_id_owned_by_launch() {
+    local inspected_network network_id network_token
+
+    inspected_network="$(docker network inspect \
+        --format "{{.Id}} {{index .Labels \"$WEB_LEGACY_LABEL_KEY\"}}" \
+        "$WEB_NETWORK_NAME" 2>/dev/null || true)"
+    network_id="${inspected_network%% *}"
+    network_token="${inspected_network#* }"
+    if [[ "$network_id" =~ ^[0-9a-f]{12,64}$ && "$network_token" == "$WEB_LAUNCH_TOKEN" ]]; then
+        printf '%s\n' "$network_id"
+    else
+        return 1
+    fi
+}
+
+cleanup_web_temporary_files() {
+    if [[ -n "${WEB_CREDENTIALS_TEMP_FILE:-}" ]]; then
+        rm -f -- "$WEB_CREDENTIALS_TEMP_FILE"
+        WEB_CREDENTIALS_TEMP_FILE=""
+    fi
+    if [[ -n "${WEB_CURL_AUTH_FILE:-}" ]]; then
+        rm -f -- "$WEB_CURL_AUTH_FILE"
+        WEB_CURL_AUTH_FILE=""
+    fi
+}
+
+cleanup_web_server() {
+    local network_id
+
+    if [[ "${WEB_CLEANUP_ACTIVE:-0}" != "1" ]]; then
+        return 0
+    fi
+    cleanup_web_temporary_files
+    if [[ -z "${WEB_CONTAINER_ID:-}" && -n "${WEB_LAUNCH_TOKEN:-}" ]]; then
+        capture_failed_web_container
+    fi
+    if [[ -n "${WEB_CONTAINER_ID:-}" ]]; then
+        echo "Web server logs for '$WEB_CONTAINER_ID':" >&2
+        docker logs "$WEB_CONTAINER_ID" >&2 || true
+        docker rm -f "$WEB_CONTAINER_ID" >&2 || true
+    fi
+    if network_id="$(web_network_id_owned_by_launch)"; then
+        docker network rm "$network_id" >&2 || true
+    fi
+    return 0
+}
+
+emit_web_server_details() {
+    local bind_mode stop_command
+
+    if [[ "$WEB_NETWORK_ACCESSIBLE" == "1" ]]; then
+        bind_mode="network-accessible"
+    else
+        bind_mode="loopback"
+    fi
+    stop_command="$(web_server_stop_command)"
+    cat <<EOF
+OpenCode web server is running.
+  URL: http://127.0.0.1:$WEB_PORT
+  Bind: $bind_mode
+  Basic Auth credentials: $WEB_CREDENTIALS_FILE
+  Container ID: $WEB_CONTAINER_ID
+  Network: $WEB_NETWORK_NAME
+  Stop and remove: $stop_command
+EOF
+}
+
+web_server_stop_command() {
+    local workspace_argument
+
+    printf -v workspace_argument '%q' "$REAL_WORKSPACE"
+    printf '%s --workspace %s --web-server stop --web-port %s' "$LAUNCHER_COMMAND" "$workspace_argument" "$WEB_PORT"
+}
+
+web_resource_is_owned() {
+    local ownership_label="$1" legacy_launch_token="$2"
+
+    [[ "$ownership_label" == "$WEB_OWNERSHIP_LABEL_VALUE" \
+        || "$legacy_launch_token" =~ ^[0-9a-f]{32}$ ]]
+}
+
+inspect_web_container() {
+    local inspected_container ownership_label legacy_launch_token extra
+
+    WEB_INSPECTED_CONTAINER_ID=""
+    WEB_INSPECTED_CONTAINER_RUNNING=""
+    if inspected_container="$(docker container inspect \
+        --format "{{.Id}}|{{index .Config.Labels \"$WEB_OWNERSHIP_LABEL_KEY\"}}|{{index .Config.Labels \"$WEB_LEGACY_LABEL_KEY\"}}|{{.State.Running}}" \
+        "$WEB_CONTAINER_NAME" 2>&1)"; then
+        :
+    elif [[ "$inspected_container" == *"No such container:"* || "$inspected_container" == *"no such container"* || "$inspected_container" == *"no container with name or ID"* ]]; then
+        return 1
+    else
+        echo "Error: Could not inspect web server container '$WEB_CONTAINER_NAME': $inspected_container" >&2
+        return 3
+    fi
+    IFS='|' read -r WEB_INSPECTED_CONTAINER_ID ownership_label legacy_launch_token WEB_INSPECTED_CONTAINER_RUNNING extra <<< "$inspected_container"
+    if [[ "${inspected_container//[^|]/}" != "|||" || -n "$extra" || ! "$WEB_INSPECTED_CONTAINER_ID" =~ ^[0-9a-f]{12,64}$ || ( "$WEB_INSPECTED_CONTAINER_RUNNING" != "true" && "$WEB_INSPECTED_CONTAINER_RUNNING" != "false" ) ]]; then
+        echo "Error: Web server container inspection returned an invalid format for '$WEB_CONTAINER_NAME'." >&2
+        return 3
+    fi
+    web_resource_is_owned "$ownership_label" "$legacy_launch_token" || return 2
+}
+
+inspect_web_network() {
+    local inspected_network ownership_label legacy_launch_token extra
+
+    WEB_INSPECTED_NETWORK_ID=""
+    if inspected_network="$(docker network inspect \
+        --format "{{.Id}}|{{index .Labels \"$WEB_OWNERSHIP_LABEL_KEY\"}}|{{index .Labels \"$WEB_LEGACY_LABEL_KEY\"}}" \
+        "$WEB_NETWORK_NAME" 2>&1)"; then
+        :
+    elif [[ "$inspected_network" == *"No such network:"* || "$inspected_network" == *network*not\ found* ]]; then
+        return 1
+    else
+        echo "Error: Could not inspect web server network '$WEB_NETWORK_NAME': $inspected_network" >&2
+        return 3
+    fi
+    IFS='|' read -r WEB_INSPECTED_NETWORK_ID ownership_label legacy_launch_token extra <<< "$inspected_network"
+    if [[ "${inspected_network//[^|]/}" != "||" || -n "$extra" || ! "$WEB_INSPECTED_NETWORK_ID" =~ ^[0-9a-f]{12,64}$ ]]; then
+        echo "Error: Web server network inspection returned an invalid format for '$WEB_NETWORK_NAME'." >&2
+        return 3
+    fi
+    web_resource_is_owned "$ownership_label" "$legacy_launch_token" || return 2
+}
+
+web_credentials_state() {
+    if [[ -f "$WEB_CREDENTIALS_FILE" && ! -L "$WEB_CREDENTIALS_FILE" ]]; then
+        printf 'present\n'
+    else
+        printf 'missing\n'
+    fi
+}
+
+web_container_bind_mode() {
+    local bindings binding has_binding=0 has_network_accessible_binding=0
+
+    if ! bindings="$(docker container inspect \
+        --format "{{range (index .NetworkSettings.Ports \"$WEB_PORT/tcp\")}}{{println .HostIP}}{{end}}" \
+        "$WEB_INSPECTED_CONTAINER_ID" 2>&1)"; then
+        echo "Error: Could not inspect web server port bindings for '$WEB_INSPECTED_CONTAINER_ID': $bindings" >&2
+        return 1
+    fi
+    while IFS= read -r binding; do
+        [[ -n "$binding" ]] || continue
+        has_binding=1
+        case "$binding" in
+            127.*|::1) ;;
+            0.0.0.0|::|*) has_network_accessible_binding=1 ;;
+        esac
+    done <<< "$bindings"
+
+    if [[ "$has_network_accessible_binding" == "1" ]]; then
+        printf 'network-accessible\n'
+    elif [[ "$has_binding" == "1" ]]; then
+        printf 'loopback\n'
+    else
+        printf 'unknown\n'
+    fi
+}
+
+require_safe_web_server_runtime() {
+    local server_version major_version
+
+    # Podman does not use Docker's published-port implementation. For Docker,
+    # require the Engine release that fixed localhost publication on local L2
+    # networks rather than silently relying on a potentially exposed bind.
+    if [[ "$RUNTIME_VERSION" == podman* ]]; then
+        return 0
+    fi
+    if ! server_version="$(docker version --format '{{.Server.Version}}' 2>/dev/null)" \
+        || ! [[ "$server_version" =~ ^([0-9]+)\. ]]; then
+        echo "Error: Could not determine Docker Engine version; Docker Engine 28 or later is required for --web-server." >&2
+        return 1
+    fi
+    major_version="${BASH_REMATCH[1]}"
+    if ((10#$major_version < 28)); then
+        echo "Error: Docker Engine 28 or later is required for --web-server because older Docker versions can expose localhost-published ports to other hosts on the local network." >&2
+        return 1
+    fi
+}
+
+show_web_server_status() {
+    local container_result=0 network_result=0 service="absent" bind_mode="unavailable"
+    local container_id="absent" network_id="absent" credentials_state
+
+    if inspect_web_container; then
+        container_id="$WEB_INSPECTED_CONTAINER_ID"
+        if [[ "$WEB_INSPECTED_CONTAINER_RUNNING" == "true" ]]; then
+            service="running"
+        else
+            service="stopped"
+        fi
+    else
+        container_result=$?
+    fi
+    if inspect_web_network; then
+        network_id="$WEB_INSPECTED_NETWORK_ID"
+    else
+        network_result=$?
+    fi
+    if [[ "$container_result" == "3" || "$network_result" == "3" ]]; then
+        return 1
+    fi
+    [[ "$container_result" == "2" ]] && container_id="unmanaged"
+    [[ "$network_result" == "2" ]] && network_id="unmanaged"
+    if [[ "$service" == "running" ]]; then
+        bind_mode="$(web_container_bind_mode)" || return 1
+    fi
+    credentials_state="$(web_credentials_state)"
+
+    cat <<EOF
+OpenCode web server status:
+  Service: $service
+  Bind: $bind_mode
+  Container name: $WEB_CONTAINER_NAME
+  Container ID: $container_id
+  Network name: $WEB_NETWORK_NAME
+  Network ID: $network_id
+  Credentials: $credentials_state
+EOF
+}
+
+stop_web_server() {
+    local container_result=0 network_result=0 credentials_state stop_status=0
+
+    if inspect_web_container; then
+        :
+    else
+        container_result=$?
+    fi
+    if inspect_web_network; then
+        :
+    else
+        network_result=$?
+    fi
+    if [[ "$container_result" == "3" || "$network_result" == "3" ]]; then
+        return 1
+    fi
+
+    if [[ "$container_result" == "0" ]]; then
+        if docker rm -f "$WEB_INSPECTED_CONTAINER_ID"; then
+            echo "Removed web server container '$WEB_INSPECTED_CONTAINER_ID'."
+        else
+            echo "Error: Could not remove web server container '$WEB_INSPECTED_CONTAINER_ID'." >&2
+            stop_status=1
+        fi
+    elif [[ "$container_result" == "2" ]]; then
+        echo "Error: Refusing to remove unowned container '$WEB_CONTAINER_NAME'." >&2
+        stop_status=1
+    fi
+
+    if [[ "$network_result" == "0" ]]; then
+        if docker network rm "$WEB_INSPECTED_NETWORK_ID"; then
+            echo "Removed web server network '$WEB_INSPECTED_NETWORK_ID'."
+        else
+            echo "Warning: Could not remove web server network '$WEB_INSPECTED_NETWORK_ID'; attached endpoints were not force-disconnected." >&2
+            stop_status=1
+        fi
+    elif [[ "$network_result" == "2" ]]; then
+        echo "Error: Refusing to remove unowned network '$WEB_NETWORK_NAME'." >&2
+        stop_status=1
+    fi
+
+    credentials_state="$(web_credentials_state)"
+    echo "Web server credentials preserved: $credentials_state ($WEB_CREDENTIALS_FILE)."
+    return "$stop_status"
+}
+
+web_server_exit_trap() {
+    local exit_status="$1"
+
+    trap - EXIT INT TERM
+    cleanup_web_server
+    exit "$exit_status"
+}
+
+web_server_signal_trap() {
+    local exit_status="$1"
+
+    trap - EXIT INT TERM
+    cleanup_web_server
+    exit "$exit_status"
+}
+
+activate_web_server_cleanup() {
+    WEB_CLEANUP_ACTIVE=1
+    trap 'web_server_exit_trap $?' EXIT
+    trap 'web_server_signal_trap 130' INT
+    trap 'web_server_signal_trap 143' TERM
+}
+
+if [[ "$WEB_SERVER" == "1" && "$WEB_SERVER_COMMAND" != "start" ]]; then
+    case "$WEB_SERVER_COMMAND" in
+        stop)
+            stop_web_server
+            exit $?
+            ;;
+        status)
+            show_web_server_status
+            exit $?
+            ;;
+    esac
+fi
+
+# Ensure persistent directories exist before seeding the isolated copies.
+mkdir -p "$OPENCODE_CONTAINER_HOME"/{cache,local}
+mkdir -p "$CONTAINER_DATA_DIR" "$CONTAINER_CACHE_DIR" "$CONTAINER_STATE_DIR"
+
+# XDG_DATA_HOME: refresh auth-adjacent files every normal launch so host logins
+# stay visible. Seed the database and its sidecars only while the container
+# database is absent; cache/state refreshes must never replace it.
+if [[ "$SYNC_CONFIG_ONLY" != "1" && "$OPENCODE_SYNC_HOST_AUTH" != "0" && -d "$HOST_DATA_DIR" ]]; then
+    copy_file "$HOST_DATA_DIR/auth.json"     "$CONTAINER_DATA_DIR/auth.json"
+    copy_file "$HOST_DATA_DIR/account.json"  "$CONTAINER_DATA_DIR/account.json"
+    copy_file "$HOST_DATA_DIR/mcp-auth.json" "$CONTAINER_DATA_DIR/mcp-auth.json"
+    if [[ ! -e "$CONTAINER_DATA_DIR/opencode.db" && ! -L "$CONTAINER_DATA_DIR/opencode.db" ]]; then
+        copy_first_init "$HOST_DATA_DIR/opencode.db"     "$CONTAINER_DATA_DIR/opencode.db"
+        copy_first_init "$HOST_DATA_DIR/opencode.db-shm" "$CONTAINER_DATA_DIR/opencode.db-shm"
+        copy_first_init "$HOST_DATA_DIR/opencode.db-wal" "$CONTAINER_DATA_DIR/opencode.db-wal"
+    fi
+fi
+
+# XDG_CACHE_HOME: seed plugin install tree, models.json, and the opencode-quota
+# pricing/provider caches. These can be large, so they are first-init only.
+if [[ "$OPENCODE_SYNC_CONFIG_CACHE" != "0" && -d "$HOST_CACHE_DIR" ]]; then
+    copy_tree_first_init "$HOST_CACHE_DIR/packages"             "$CONTAINER_CACHE_DIR/packages"
+    copy_config_file    "$HOST_CACHE_DIR/models.json"          "$CONTAINER_CACHE_DIR/models.json"
+    copy_tree_first_init "$HOST_CACHE_DIR/opencode-quota"       "$CONTAINER_CACHE_DIR/opencode-quota"
+    copy_tree_first_init "$HOST_CACHE_DIR/quota-provider-state" "$CONTAINER_CACHE_DIR/quota-provider-state"
+fi
+
+# XDG_STATE_HOME: seed only model/config metadata, never host UI history or
+# locks. plugin-meta.json needs its host XDG paths rewritten for the container.
+if [[ "$OPENCODE_SYNC_CONFIG_STATE" != "0" && -d "$HOST_STATE_DIR" ]]; then
+    copy_config_file "$HOST_STATE_DIR/model.json" "$CONTAINER_STATE_DIR/model.json"
+    copy_config_file "$HOST_STATE_DIR/kv.json"    "$CONTAINER_STATE_DIR/kv.json"
+    copy_plugin_meta "$HOST_STATE_DIR/plugin-meta.json" "$CONTAINER_STATE_DIR/plugin-meta.json"
+fi
+
+# --sync-config only force-refreshes cache/state and deliberately exits before
+# workspace validation or Docker detection.
+if [[ "$SYNC_CONFIG_ONLY" == "1" ]]; then
+    echo "Config sync complete."
+    exit 0
+fi
+
+# Base docker run arguments
+if [[ "$WEB_SERVER" != "1" ]]; then
+    DOCKER_ARGS+=(--rm)
+fi
+DOCKER_ARGS+=(
+    --cap-drop=ALL
+    --security-opt no-new-privileges:true
+    --read-only
+    --tmpfs /tmp:rw,nosuid,nodev,exec,size=256m
+    # OpenCode may initialize XDG_CONFIG_HOME when the host has no config to
+    # mount. Keep that parent ephemeral while nested host config mounts stay RO.
+    --tmpfs /home/opencode/.config:rw,nosuid,nodev,noexec,size=16m
+    --init
+    --env "OPENCODE_PROFILE=$PROFILE"
+    --env HOME=/home/opencode
+    --env EDITOR=nvim
+    --env VISUAL=nvim
+    --env TERM=xterm-256color
+    --env COLORTERM=truecolor
+    --workdir /workspace
+)
+
+# Pass GitHub tokens if they exist
+[[ -n "${GITHUB_TOKEN:-}" ]] && DOCKER_ARGS+=(--env GITHUB_TOKEN="$GITHUB_TOKEN")
+[[ -n "${GH_TOKEN:-}" ]] && DOCKER_ARGS+=(--env GH_TOKEN="$GH_TOKEN")
+
+# Pass standard proxy settings through only when explicitly set.
+pass_env_if_set \
+    HTTP_PROXY \
+    HTTPS_PROXY \
+    ALL_PROXY \
+    NO_PROXY \
+    http_proxy \
+    https_proxy \
+    all_proxy \
+    no_proxy \
+    NODE_EXTRA_CA_CERTS
+
+pass_env_if_set TYPESAFE_API_KEY
+
+if [[ "$WEB_SERVER" != "1" && -t 0 && -t 1 ]]; then
+    DOCKER_ARGS+=(-it)
+fi
+
+# Runtime-specific user mapping:
+# - Podman rootless needs keep-id for writable bind mounts.
+# - Docker uses explicit uid:gid mapping.
+RUNTIME_VERSION="$(docker --version 2>/dev/null || true)"
+RW_MOUNT_OPTS="rw"
+RO_MOUNT_OPTS="ro"
+if [[ "$RUNTIME_VERSION" == podman* ]]; then
+    DOCKER_ARGS+=(--userns keep-id)
+    DOCKER_ARGS+=(--user "$(id -u):$(id -g)")
+    # Podman on SELinux hosts needs relabeling for writable bind mounts.
+    # Keep this Podman-only so Docker users keep default mount semantics.
+    RW_MOUNT_OPTS="rw,Z"
+    RO_MOUNT_OPTS="ro,Z"
+else
+    DOCKER_ARGS+=(--user "$(id -u):$(id -g)")
+fi
+
+# SSH Agent forwarding
+if [[ -n "${SSH_AUTH_SOCK:-}" && -S "$SSH_AUTH_SOCK" ]]; then
+    DOCKER_ARGS+=(
+        --env SSH_AUTH_SOCK=/tmp/ssh-agent.sock
+        --volume "$SSH_AUTH_SOCK:/tmp/ssh-agent.sock:ro"
+    )
+fi
+
+# SSH config and known_hosts
+if [[ -f "$HOME/.ssh/config" ]]; then
+    DOCKER_ARGS+=(--volume "$HOME/.ssh/config:/home/opencode/.ssh/config:ro")
+fi
+if [[ -f "$HOME/.ssh/known_hosts" ]]; then
+    DOCKER_ARGS+=(--volume "$HOME/.ssh/known_hosts:/home/opencode/.ssh/known_hosts:ro")
+fi
+
+# Secure profile mounts
+DOCKER_ARGS+=(
+    --volume "$WORKSPACE:/workspace:$RW_MOUNT_OPTS"
+
+    --volume "$OPENCODE_CONTAINER_HOME/local:/home/opencode/.local:$RW_MOUNT_OPTS"
+    --volume "$OPENCODE_CONTAINER_HOME/cache:/home/opencode/.cache:$RW_MOUNT_OPTS"
+)
+
+# OpenCode host config (XDG_CONFIG_HOME) is mounted read-only so the container
+# sees the same opencode.json/agents/plugins/skills as the host. Guard on
+# existence and use the resolved host config dir (honors XDG_CONFIG_HOME).
+if [[ -d "$HOST_CONFIG_DIR" ]]; then
+    DOCKER_ARGS+=(--volume "$HOST_CONFIG_DIR:$CONTAINER_CONFIG_PATH:ro")
+fi
+
+# Explicit local plugin checkouts are mounted read-only at the same absolute
+# path so file:// plugin specs in the shared OpenCode config resolve unchanged.
+append_local_plugin_mounts || exit 1
+
+# Set XDG base dirs explicitly so OpenCode resolves config/data/cache/state
+# deterministically inside the container rather than relying on HOME matching
+# the default XDG layout.
+DOCKER_ARGS+=(
+    --env "XDG_CONFIG_HOME=$CONTAINER_HOME/.config"
+    --env "XDG_DATA_HOME=$CONTAINER_HOME/.local/share"
+    --env "XDG_CACHE_HOME=$CONTAINER_HOME/.cache"
+    --env "XDG_STATE_HOME=$CONTAINER_HOME/.local/state"
+)
+
+# Git config
+if [[ -f "$HOME/.gitconfig" ]]; then
+    DOCKER_ARGS+=(--volume "$HOME/.gitconfig:/home/opencode/.gitconfig:ro")
+fi
+
+# GitHub CLI config
+if [[ -d "$HOME/.config/gh" ]]; then
+    DOCKER_ARGS+=(--volume "$HOME/.config/gh:/home/opencode/.config/gh:ro")
+fi
+
+# Load config overrides with precedence:
+# 1) OPENCODE_CONFIG_CONTENT env var (can be set in opencode-local.sh or shell env)
+# 2) OPENCODE_OVERRIDES_FILE path (can be set in opencode-local.sh)
+# 3) No extra config content
+if [[ -n "${OPENCODE_CONFIG_CONTENT:-}" ]]; then
+    DOCKER_ARGS+=(--env "OPENCODE_CONFIG_CONTENT=$OPENCODE_CONFIG_CONTENT")
+elif [[ -n "${OPENCODE_OVERRIDES_FILE:-}" && -f "${OPENCODE_OVERRIDES_FILE}" ]]; then
+    DOCKER_ARGS+=(--env "OPENCODE_CONFIG_CONTENT=$(tr -d '\n' <"$OPENCODE_OVERRIDES_FILE")")
+fi
+
+# Native profile mounts
+if [[ "$PROFILE" == "native" ]]; then
+    if [[ -d "$HOME/.config/nvim" ]]; then
+        DOCKER_ARGS+=(--volume "$HOME/.config/nvim:/home/opencode/.config/nvim:ro")
+    fi
+elif [[ "$PROFILE" != "secure" ]]; then
+    echo "Error: Unknown profile '$PROFILE'. Use 'secure' or 'native'." >&2
+    exit 1
+fi
+
+# Stage selected executables only after all non-launch validation has passed.
+# The source files are never mounted: the temporary copies are the only paths
+# relabeled by Podman and mounted into the container.
+if ((${#WITH_TOOLS[@]} != 0)); then
+    if ! prepare_tool_staging; then
+        exit 1
+    fi
+    # Keep bind syntax accepted by both Docker and Podman. RO_MOUNT_OPTS adds
+    # Podman's SELinux relabel only on Podman; file mode and container
+    # hardening provide the remaining boundary for this snapshot.
+    TOOL_MOUNT_OPTS="$RO_MOUNT_OPTS"
+    DOCKER_ARGS+=(
+        --volume "$TOOLS_STAGE_DIR:$TOOLS_CONTAINER_PATH:$TOOL_MOUNT_OPTS"
+        --env "PATH=$TOOLS_CONTAINER_PATH:$CONTAINER_DEFAULT_PATH"
+    )
+fi
+
+# Execute docker run
+if [[ "$WEB_SERVER" == "1" ]]; then
+    if ! command -v curl >/dev/null 2>&1; then
+        echo "Error: curl is required to verify the web server." >&2
+        exit 1
+    fi
+    if [[ ! -f "$WEB_ENTRYPOINT" ]]; then
+        echo "Error: Web server entrypoint is not a regular file: $WEB_ENTRYPOINT" >&2
+        exit 1
+    fi
+    require_safe_web_server_runtime || exit 1
+    if inspect_web_container; then
+        echo "Error: Web server container '$WEB_CONTAINER_NAME' already exists." >&2
+        echo "Stop and remove it with: $(web_server_stop_command)" >&2
+        exit 1
+    else
+        container_inspect_result=$?
+        if [[ "$container_inspect_result" != "1" ]]; then
+            if [[ "$container_inspect_result" == "2" ]]; then
+                echo "Error: Web server container '$WEB_CONTAINER_NAME' already exists but is not owned by this launcher." >&2
+                echo "Stop and remove it with: $(web_server_stop_command)" >&2
+            fi
+            exit 1
+        fi
+    fi
+    if [[ "$WEB_NETWORK_ACCESSIBLE" == "1" ]]; then
+        echo "WARNING: --network-accessible exposes this HTTP server and its Basic Auth credentials on your LAN. The server can access your workspace and provider credentials." >&2
+        WEB_BIND_ADDRESS="0.0.0.0"
+    else
+        WEB_BIND_ADDRESS="127.0.0.1"
+    fi
+    create_web_launch_token
+    WEB_CONTAINER_ID=""
+    WEB_CREDENTIALS_TEMP_FILE=""
+    WEB_CURL_AUTH_FILE=""
+    activate_web_server_cleanup
+    create_web_credentials
+    create_web_network
+    DOCKER_ARGS+=(
+        --detach
+        --name "$WEB_CONTAINER_NAME"
+        --label "$WEB_OWNERSHIP_LABEL_KEY=$WEB_OWNERSHIP_LABEL_VALUE"
+        --label "$WEB_LEGACY_LABEL_KEY=$WEB_LAUNCH_TOKEN"
+        --publish "${WEB_BIND_ADDRESS}:${WEB_PORT}:${WEB_PORT}"
+        --volume "$WEB_CREDENTIALS_FILE:/tmp/opencode-web-credentials:$RO_MOUNT_OPTS"
+        --volume "$WEB_ENTRYPOINT:/tmp/opencode-web-entrypoint:$RO_MOUNT_OPTS"
+        --env "OPENCODE_WEB_VARIANT=$LAUNCHER_MODE"
+        --network "$WEB_NETWORK_NAME"
+        # Override the image entrypoint so custom or stale images cannot skip
+        # credential loading; /bin/sh executes the mounted wrapper below.
+        --entrypoint /bin/sh
+    )
+
+    if ! WEB_CONTAINER_ID="$(docker run "${DOCKER_ARGS[@]}" "$IMAGE" /tmp/opencode-web-entrypoint "$WEB_PORT")" \
+        || ! [[ "$WEB_CONTAINER_ID" =~ ^[0-9a-f]{12,64}$ ]]; then
+        WEB_CONTAINER_ID=""
+        capture_failed_web_container
+        echo "Error: Could not start web server container '$WEB_CONTAINER_NAME'." >&2
+        exit 1
+    fi
+    if ! wait_for_web_server "http://127.0.0.1:$WEB_PORT$WEB_HEALTH_PATH"; then
+        exit 1
+    fi
+
+    if ! emit_web_server_details; then
+        echo "Error: Could not report web server launch details." >&2
+        exit 1
+    fi
+
+    WEB_CLEANUP_ACTIVE=0
+    trap - EXIT INT TERM
+    exit 0
+fi
+
+if [[ ${#ARGS[@]} -eq 0 ]]; then
+    ARGS=("$OPENCODE_EXECUTABLE")
+elif [[ "$RAW_COMMAND" != "1" ]]; then
+    ARGS=("$OPENCODE_EXECUTABLE" "${ARGS[@]}")
+fi
+
+if ((${#WITH_TOOLS[@]} != 0)); then
+    # Do not exec here: an exec'd launcher cannot remove the host-side
+    # snapshot. Explicitly duplicate stdin because Bash gives asynchronous
+    # commands /dev/null when job control is disabled. This retains the former
+    # interactive and raw-command behavior while we forward terminal signals
+    # to the Docker CLI and wait for it to exit.
+    TOOLS_CHILD_PID=""
+    TOOLS_CHILD_REAPED=0
+    TOOLS_PENDING_SIGNAL=""
+    trap 'tool_launch_exit_trap $?' EXIT
+    trap 'forward_tool_launch_signal INT' INT
+    trap 'forward_tool_launch_signal TERM' TERM
+    trap 'forward_tool_launch_signal HUP' HUP
+
+    docker run "${DOCKER_ARGS[@]}" "$IMAGE" "${ARGS[@]}" <&0 &
+    TOOLS_CHILD_PID=$!
+    if [[ -n "$TOOLS_PENDING_SIGNAL" ]]; then
+        forward_tool_launch_signal "$TOOLS_PENDING_SIGNAL"
+        TOOLS_PENDING_SIGNAL=""
+    fi
+
+    docker_status=0
+    while :; do
+        if wait "$TOOLS_CHILD_PID"; then
+            docker_status=$?
+            break
+        else
+            docker_status=$?
+        fi
+        # Bash can interrupt wait(2) with the signal status while the Docker
+        # CLI is still alive. Reap it rather than exiting and leaving a
+        # container behind. A real Docker exit status is returned directly.
+        case "$docker_status" in
+            129|130|143)
+                if kill -0 "$TOOLS_CHILD_PID" 2>/dev/null; then
+                    continue
+                fi
+                ;;
+        esac
+        break
+    done
+    TOOLS_CHILD_REAPED=1
+    cleanup_tool_staging
+    trap - EXIT
+    trap - INT TERM HUP
+    exit "$docker_status"
+fi
+
+exec docker run "${DOCKER_ARGS[@]}" "$IMAGE" "${ARGS[@]}"
+\n'* || "$spec" == *
+sanitize_web_container_name() {
+    local raw="$1"
+    local sanitized
+
+    sanitized="$(printf '%s' "$raw" | tr '[:upper:]' '[:lower:]' | tr -cs '[:alnum:]._-' '-')"
+    sanitized="${sanitized#-}"
+    sanitized="${sanitized%-}"
+    sanitized="${sanitized:0:40}"
+    if [[ -z "$sanitized" ]]; then
+        sanitized="workspace"
+    fi
+    printf '%s' "$sanitized"
+}
+
+DOCKER_ARGS=()
+
+LOCAL_HOOK="$SCRIPT_DIR/opencode-local.sh"
+if [[ -f "$LOCAL_HOOK" ]]; then
+    # shellcheck disable=SC1090
+    source "$LOCAL_HOOK"
+fi
+
+# The v2 wrappers select this mode with a private positional marker. Resolve it
+# after the local hook so an environment variable or local default cannot cause
+# a stable launcher to execute the preview binary (or vice versa).
+LAUNCHER_MODE="stable"
+if [[ "${1:-}" == "--__opencode2" ]]; then
+    LAUNCHER_MODE="v2"
+    shift
+fi
+if [[ "$LAUNCHER_MODE" == "v2" ]]; then
+    LAUNCHER_COMMAND="opencode2-container"
+    OPENCODE_EXECUTABLE="opencode2"
+    WEB_NAME_PREFIX="opencode2-web-"
+    WEB_HEALTH_PATH="/api/health"
+    OPENCODE_CONTAINER_HOME="${OPENCODE2_CONTAINER_HOME:-${OPENCODE_CONTAINER_HOME:-$HOME/.local/share/opencode2-container}}"
+else
+    LAUNCHER_COMMAND="opencode-container"
+    OPENCODE_EXECUTABLE="opencode"
+    WEB_NAME_PREFIX="opencode-web-"
+    WEB_HEALTH_PATH="/global/health"
+    OPENCODE_CONTAINER_HOME="${OPENCODE_CONTAINER_HOME:-$HOME/.local/share/opencode-container}"
+fi
+
+# Default values (env-overridable)
+PROFILE="${OPENCODE_PROFILE:-secure}"
+IMAGE="${OPENCODE_IMAGE:-opencode-containment:latest}"
+WORKSPACE="${OPENCODE_WORKSPACE:-$PWD}"
+OPENCODE_SYNC_HOST_AUTH="${OPENCODE_SYNC_HOST_AUTH:-1}"
+OPENCODE_SYNC_CONFIG_CACHE="${OPENCODE_SYNC_CONFIG_CACHE:-1}"
+OPENCODE_SYNC_CONFIG_STATE="${OPENCODE_SYNC_CONFIG_STATE:-1}"
+OPENCODE_SYNC_CONFIG_FORCE="${OPENCODE_SYNC_CONFIG_FORCE:-0}"
+WEB_PORT="${OPENCODE_WEB_PORT:-4096}"
+
+# Host OpenCode directories across all four XDG base categories.
+# OPENCODE_HOST_STATE_DIR is retained as the data-dir override for backwards
+# compatibility (it historically pointed at ~/.local/share/opencode, which is
+# XDG_DATA_HOME, not XDG_STATE_HOME).
+HOST_CONFIG_DIR="${OPENCODE_CONFIG_DIR:-${XDG_CONFIG_HOME:-$HOME/.config}/opencode}"
+HOST_DATA_DIR="${OPENCODE_HOST_STATE_DIR:-${XDG_DATA_HOME:-$HOME/.local/share}/opencode}"
+HOST_CACHE_DIR="${OPENCODE_HOST_CACHE_DIR:-${XDG_CACHE_HOME:-$HOME/.cache}/opencode}"
+HOST_STATE_DIR="${OPENCODE_HOST_RUNTIME_STATE_DIR:-${XDG_STATE_HOME:-$HOME/.local/state}/opencode}"
+
+# Container persistent state directories (host-side paths, bind-mounted in).
+CONTAINER_DATA_DIR="$OPENCODE_CONTAINER_HOME/local/share/opencode"
+CONTAINER_CACHE_DIR="$OPENCODE_CONTAINER_HOME/cache/opencode"
+CONTAINER_STATE_DIR="$OPENCODE_CONTAINER_HOME/local/state/opencode"
+# Container runtime paths (what the container sees at runtime).
+CONTAINER_HOME="/home/opencode"
+CONTAINER_CONFIG_PATH="$CONTAINER_HOME/.config/opencode"
+CONTAINER_DATA_PATH="$CONTAINER_HOME/.local/share/opencode"
+CONTAINER_CACHE_PATH="$CONTAINER_HOME/.cache/opencode"
+CONTAINER_STATE_PATH="$CONTAINER_HOME/.local/state/opencode"
+WEB_CREDENTIALS_DIR="$OPENCODE_CONTAINER_HOME/web-server"
+WEB_ENTRYPOINT="$SCRIPT_DIR/scripts/web-server-entrypoint.sh"
+WEB_OWNERSHIP_LABEL_KEY="io.opencode-containment.web-server"
+WEB_OWNERSHIP_LABEL_VALUE="true"
+WEB_LEGACY_LABEL_KEY="io.opencode-containment.web-launch-id"
+TOOLS_CONTAINER_PATH="/opt/opencode-tools"
+# Keep the image's normal fixed PATH while avoiding propagation of the host
+# PATH. The Dockerfile prepends cargo/bin and local/bin to this Alpine base
+# PATH; the selected tools are intentionally first so their names are usable
+# without an absolute path.
+CONTAINER_DEFAULT_PATH="/usr/local/cargo/bin:/usr/local/bin:/usr/local/sbin:/usr/sbin:/usr/bin:/sbin:/bin"
+
+show_help() {
+    cat <<EOF
+Usage: $LAUNCHER_COMMAND [OPTIONS] [-- ARGS...]
+       $LAUNCHER_COMMAND [COMMON OPTIONS] --web-server [start|stop|status] [--web-port PORT] [--network-accessible]
+
+Options:
+  --profile PROFILE   Profile to use: secure or native (default: OPENCODE_PROFILE or secure)
+  --image IMAGE       Container image to use (default: OPENCODE_IMAGE or opencode-containment:latest)
+  --workspace DIR     Workspace directory to mount (default: OPENCODE_WORKSPACE or current directory)
+  --with-tool COMMAND_OR_PATH
+                       Snapshot and expose one host executable for this launch;
+                       may be repeated, but must appear before '--'
+  --web-server        Manage OpenCode's web server in a detached Docker container
+  --web-port PORT     Port for the web server (default: OPENCODE_WEB_PORT or 4096)
+  --network-accessible
+                       Publish a started web server to the LAN (start only)
+  --sync-config       Re-seed OpenCode cache/state from host (forces overwrite), then exit
+  --help              Show this help message
+
+Behavior:
+  Without '--', arguments are passed to '$OPENCODE_EXECUTABLE'.
+     Example: $LAUNCHER_COMMAND auth ls
+  With '--', arguments are executed as a raw container command.
+    Example: $LAUNCHER_COMMAND -- bash
+  --with-tool resolves bare names through the host shell's external-command PATH,
+  then snapshots each selected file read-only under $TOOLS_CONTAINER_PATH.
+  The namespace is prepended to the container's fixed PATH; it does not pass
+  the host PATH, import additional symlink targets, or import host dependencies.
+  --with-tool requires a container launch and cannot be combined with
+  --web-server or --sync-config.
+  --web-server starts the server by default; its commands are start, stop, and status.
+  --web-server cannot be combined with --with-tool, OpenCode, or raw command arguments.
+
+Variant:
+  This launcher uses '$OPENCODE_EXECUTABLE'. The opencode2 launcher is a beta
+  preview and uses 'serve' plus /api/health for web-server mode.
+
+Profiles:
+  secure: Essential mounts only (opencode config, git config, workspace, persistent cache/state, SSH agent)
+  native: secure + nvim config/plugins (read-only)
+
+OpenCode state categories (host -> container):
+  Config (XDG_CONFIG_HOME):  read-only mount, shared with host
+  Data   (XDG_DATA_HOME):     auth/account/mcp-auth refreshed each launch;
+                             opencode.db seeded first-init only
+  Cache  (XDG_CACHE_HOME):   plugins, models.json, quota caches seeded first-init
+  State  (XDG_STATE_HOME):    model.json, kv.json, plugin-meta.json seeded first-init
+                             (plugin-meta.json host paths rewritten to container home)
+
+Local overrides (optional, gitignored):
+  opencode-local.sh    Shell hook sourced before docker run (env vars, Docker args, config)
+  See opencode-local.example.sh for details.
+
+Sync env vars:
+  OPENCODE_SYNC_HOST_AUTH=0       skip data-dir auth/account/db seeding
+  OPENCODE_SYNC_CONFIG_CACHE=0    skip cache-dir seeding (plugins, models, quota)
+  OPENCODE_SYNC_CONFIG_STATE=0    skip state-dir seeding (model/kv/plugin-meta)
+  OPENCODE_SYNC_CONFIG_FORCE=1    re-seed cache/state overwriting container copies
+  OPENCODE_CONFIG_DIR             override host XDG_CONFIG_HOME/opencode path
+  OPENCODE_HOST_STATE_DIR         override host data dir (legacy name; XDG_DATA_HOME/opencode)
+  OPENCODE_HOST_CACHE_DIR         override host cache dir (XDG_CACHE_HOME/opencode)
+  OPENCODE_HOST_RUNTIME_STATE_DIR override host state dir (XDG_STATE_HOME/opencode)
+EOF
+}
+
+# Parse arguments
+ARGS=()
+WITH_TOOLS=()
+RAW_COMMAND=0
+SYNC_CONFIG_ONLY=0
+WEB_SERVER=0
+WEB_PORT_SET=0
+WEB_SERVER_COMMAND="start"
+WEB_SERVER_COMMAND_SET=0
+WEB_NETWORK_ACCESSIBLE=0
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --profile)
+            PROFILE="$2"
+            shift 2
+            ;;
+        --image)
+            IMAGE="$2"
+            shift 2
+            ;;
+        --workspace)
+            WORKSPACE="$2"
+            shift 2
+            ;;
+        --with-tool)
+            if [[ $# -lt 2 || "$2" == --* ]]; then
+                echo "Error: --with-tool requires a command or path value." >&2
+                exit 1
+            fi
+            WITH_TOOLS+=("$2")
+            shift 2
+            ;;
+        --web-server)
+            if [[ "$WEB_SERVER" == "1" ]]; then
+                echo "Error: --web-server may only be specified once." >&2
+                exit 1
+            fi
+            WEB_SERVER=1
+            shift
+            ;;
+        --web-port)
+            if [[ $# -lt 2 || "$2" == --* ]]; then
+                echo "Error: --web-port requires a port value." >&2
+                exit 1
+            fi
+            WEB_PORT="$2"
+            WEB_PORT_SET=1
+            shift 2
+            ;;
+        --network-accessible)
+            WEB_NETWORK_ACCESSIBLE=1
+            shift
+            ;;
+        --sync-config)
+            OPENCODE_SYNC_CONFIG_FORCE=1
+            SYNC_CONFIG_ONLY=1
+            shift
+            ;;
+        --help)
+            show_help
+            exit 0
+            ;;
+        --)
+            RAW_COMMAND=1
+            shift
+            ARGS+=("$@")
+            break
+            ;;
+        *)
+            if [[ "$WEB_SERVER" == "1" ]]; then
+                if [[ "$WEB_SERVER_COMMAND_SET" == "0" ]]; then
+                    case "$1" in
+                        start|stop|status)
+                            WEB_SERVER_COMMAND="$1"
+                            WEB_SERVER_COMMAND_SET=1
+                            shift
+                            ;;
+                        *)
+                            echo "Error: Unknown web server command '$1'. Use start, stop, or status." >&2
+                            exit 1
+                            ;;
+                    esac
+                    continue
+                fi
+                echo "Error: --web-server $WEB_SERVER_COMMAND cannot be combined with additional arguments." >&2
+                exit 1
+            fi
+            ARGS+=("$1")
+            shift
+            ;;
+    esac
+done
+
+if [[ "$WEB_SERVER" == "1" ]]; then
+    if [[ "$SYNC_CONFIG_ONLY" == "1" ]]; then
+        echo "Error: --web-server cannot be combined with --sync-config." >&2
+        exit 1
+    fi
+    if ((${#WITH_TOOLS[@]} != 0)); then
+        echo "Error: --web-server cannot be combined with --with-tool." >&2
+        exit 1
+    fi
+    if [[ "$RAW_COMMAND" == "1" || ${#ARGS[@]} -ne 0 ]]; then
+        echo "Error: --web-server cannot be combined with OpenCode or raw command arguments." >&2
+        exit 1
+    fi
+    if [[ "$WEB_NETWORK_ACCESSIBLE" == "1" && "$WEB_SERVER_COMMAND" != "start" ]]; then
+        echo "Error: --network-accessible is only valid with --web-server start." >&2
+        exit 1
+    fi
+    if ! [[ "$WEB_PORT" =~ ^[1-9][0-9]{0,4}$ ]] || ((10#$WEB_PORT > 65535)); then
+        echo "Error: Web server port must be an integer from 1 to 65535." >&2
+        exit 1
+    fi
+elif [[ "$WEB_PORT_SET" == "1" || "$WEB_NETWORK_ACCESSIBLE" == "1" ]]; then
+    if [[ "$WEB_PORT_SET" == "1" ]]; then
+        echo "Error: --web-port requires --web-server." >&2
+    else
+        echo "Error: --network-accessible requires --web-server start." >&2
+    fi
+    exit 1
+fi
+
+if [[ "$SYNC_CONFIG_ONLY" == "1" && ${#WITH_TOOLS[@]} -ne 0 ]]; then
+    echo "Error: --with-tool cannot be combined with --sync-config." >&2
+    exit 1
+fi
+
+# Validate start/run workspaces to prevent host OS breakage. Lifecycle commands
+# only address already-created Docker resources, so they retain the supplied
+# canonical path even if it no longer exists and never require the caller to be
+# in or below that workspace.
+# --sync-config only re-seeds cache/state and never launches a container, so it
+# does not need a valid workspace or Docker.
+if [[ "${SYNC_CONFIG_ONLY:-0}" != "1" ]]; then
+    if [[ "$WEB_SERVER" == "1" && "$WEB_SERVER_COMMAND" != "start" ]]; then
+        REAL_WORKSPACE="$(resolve_web_lifecycle_workspace "$WORKSPACE")" || {
+            echo "Error: Could not resolve web server workspace path: $WORKSPACE" >&2
+            exit 1
+        }
+    else
+        REAL_HOME="$(resolve_path "$HOME")"
+        if [[ ! -e "$WORKSPACE" ]]; then
+            echo "Error: Workspace path does not exist: $WORKSPACE" >&2
+            exit 1
+        fi
+        if [[ ! -d "$WORKSPACE" ]]; then
+            echo "Error: Workspace path is not a directory: $WORKSPACE" >&2
+            exit 1
+        fi
+        REAL_WORKSPACE="$(resolve_path "$WORKSPACE")"
+        START_DIR="$(resolve_path "$PWD")"
+        if [[ "$REAL_WORKSPACE" == "/" || "$REAL_WORKSPACE" == "$REAL_HOME" ]]; then
+            echo "Error: For security reasons, mounting '/' or '$HOME' as the workspace is not allowed." >&2
+            exit 1
+        fi
+        if [[ "$REAL_WORKSPACE" != "$START_DIR" && "$REAL_WORKSPACE" != "$START_DIR"/* ]]; then
+            echo "Error: Workspace must be the current directory or one of its subdirectories." >&2
+            exit 1
+        fi
+    fi
+
+    # Check prerequisites
+    if ! command -v docker >/dev/null 2>&1; then
+        echo "Error: docker is not installed or not in PATH." >&2
+        exit 1
+    fi
+
+    if [[ "$WEB_SERVER" == "1" ]]; then
+        workspace_hash="$(printf '%s' "$REAL_WORKSPACE" | cksum)"
+        workspace_hash="${workspace_hash%% *}"
+        WEB_CONTAINER_NAME="${WEB_NAME_PREFIX}$(sanitize_web_container_name "$(basename "$REAL_WORKSPACE")")-${workspace_hash}-${WEB_PORT}"
+        WEB_NETWORK_NAME="${WEB_CONTAINER_NAME}-network"
+        WEB_CREDENTIALS_FILE="$WEB_CREDENTIALS_DIR/${WEB_CONTAINER_NAME}.credentials"
+    fi
+fi
+
+# Copy a file from host to container state.
+copy_file() {
+    local src="$1" dst="$2"
+    [[ -f "$src" ]] || return 0
+    cp -f -- "$src" "$dst"
+}
+
+# Copy a file from host to container state only when the destination is
+# missing (first-init semantics).
+copy_first_init() {
+    local src="$1" dst="$2"
+    [[ -f "$src" ]] || return 0
+    [[ -e "$dst" || -L "$dst" ]] || cp -f -- "$src" "$dst"
+}
+
+# Copy cache/state files from host to container state. These are first-init by
+# default, with OPENCODE_SYNC_CONFIG_FORCE=1 providing an explicit refresh.
+copy_config_file() {
+    local src="$1" dst="$2"
+    [[ -f "$src" ]] || return 0
+    if [[ "$OPENCODE_SYNC_CONFIG_FORCE" != "1" && ( -e "$dst" || -L "$dst" ) ]]; then
+        return 0
+    fi
+    cp -f -- "$src" "$dst"
+}
+
+directory_is_empty() (
+    local dir="$1"
+    local entries=()
+    shopt -s dotglob nullglob
+    entries=("$dir"/*)
+    ((${#entries[@]} == 0))
+)
+
+# Copy a directory tree from host to container state, but only when the
+# destination is empty (first-init semantics). Force refreshes replace the
+# destination contents rather than nesting another source directory inside it.
+copy_tree_first_init() {
+    local src="$1" dst="$2"
+    [[ -d "$src" ]] || return 0
+    if [[ "$OPENCODE_SYNC_CONFIG_FORCE" == "1" ]]; then
+        rm -rf -- "$dst"
+        mkdir -p "$dst"
+        cp -a -- "$src/." "$dst/"
+        return 0
+    fi
+
+    mkdir -p "$dst"
+    # Only seed when the destination is empty so container-created state wins.
+    if directory_is_empty "$dst"; then
+        cp -a -- "$src/." "$dst/"
+    fi
+}
+
+# Copy plugin metadata on first-init, rewriting the four host OpenCode XDG
+# paths so plugin fingerprints point at the isolated container state.
+copy_plugin_meta() {
+    local src="$1" dst="$2" tmp line
+    [[ -f "$src" ]] || return 0
+    if [[ "$OPENCODE_SYNC_CONFIG_FORCE" != "1" && ( -e "$dst" || -L "$dst" ) ]]; then
+        return 0
+    fi
+
+    tmp="$dst.tmp"
+    rm -f -- "$tmp"
+    if command -v jq >/dev/null 2>&1; then
+        if ! jq \
+            --arg host_config "$HOST_CONFIG_DIR" \
+            --arg host_data "$HOST_DATA_DIR" \
+            --arg host_cache "$HOST_CACHE_DIR" \
+            --arg host_state "$HOST_STATE_DIR" \
+            --arg container_config "$CONTAINER_CONFIG_PATH" \
+            --arg container_data "$CONTAINER_DATA_PATH" \
+            --arg container_cache "$CONTAINER_CACHE_PATH" \
+            --arg container_state "$CONTAINER_STATE_PATH" \
+            '
+            def rewrite_paths:
+              if type == "string" then
+                split($host_config) | join($container_config) |
+                split($host_data) | join($container_data) |
+                split($host_cache) | join($container_cache) |
+                split($host_state) | join($container_state)
+              elif type == "array" then map(rewrite_paths)
+              elif type == "object" then with_entries(.value |= rewrite_paths)
+              else . end;
+            rewrite_paths
+            ' "$src" > "$tmp"; then
+            rm -f -- "$tmp"
+            return 1
+        fi
+    else
+        # OpenCode writes ordinary JSON paths. Keep this fallback dependency-free
+        # while still replacing literal paths in plugin specs, targets, and themes.
+        while IFS= read -r line || [[ -n "$line" ]]; do
+            line="${line//"$HOST_CONFIG_DIR"/"$CONTAINER_CONFIG_PATH"}"
+            line="${line//"$HOST_DATA_DIR"/"$CONTAINER_DATA_PATH"}"
+            line="${line//"$HOST_CACHE_DIR"/"$CONTAINER_CACHE_PATH"}"
+            line="${line//"$HOST_STATE_DIR"/"$CONTAINER_STATE_PATH"}"
+            printf '%s\n' "$line" >> "$tmp"
+        done < "$src"
+    fi
+    mv -f -- "$tmp" "$dst"
+}
+
+stat_file_mode() {
+    local path="$1"
+
+    case "$path" in
+        -*) path="./$path" ;;
+    esac
+    if stat -f '%Lp' "$path" >/dev/null 2>&1; then
+        stat -f '%Lp' "$path"
+    else
+        stat -c '%a' -- "$path"
+    fi
+}
+
+stat_file_size() {
+    local path="$1"
+
+    case "$path" in
+        -*) path="./$path" ;;
+    esac
+    if stat -f '%z' "$path" >/dev/null 2>&1; then
+        stat -f '%z' "$path"
+    else
+        stat -c '%s' -- "$path"
+    fi
+}
+
+read_web_credentials() {
+    local mode size expected_size username_line password_line extra_line
+
+    if [[ -L "$WEB_CREDENTIALS_FILE" || ! -f "$WEB_CREDENTIALS_FILE" ]]; then
+        echo "Error: Web server credentials path is not a regular file: $WEB_CREDENTIALS_FILE" >&2
+        return 1
+    fi
+    if [[ ! -O "$WEB_CREDENTIALS_FILE" ]]; then
+        echo "Error: Web server credentials file is not owned by the current user: $WEB_CREDENTIALS_FILE" >&2
+        return 1
+    fi
+    mode="$(stat_file_mode "$WEB_CREDENTIALS_FILE")" || return 1
+    if [[ "$mode" != "600" ]]; then
+        echo "Error: Web server credentials file must have mode 0600: $WEB_CREDENTIALS_FILE" >&2
+        return 1
+    fi
+    # The fixed format is variant-specific, including both required trailing
+    # newlines. v2's server uses the fixed Basic Auth username `opencode`.
+    size="$(stat_file_size "$WEB_CREDENTIALS_FILE")" || return 1
+    if [[ "$LAUNCHER_MODE" == "v2" ]]; then
+        expected_size=124
+    else
+        expected_size=141
+    fi
+    if [[ "$size" != "$expected_size" ]]; then
+        echo "Error: Web server credentials file is malformed: $WEB_CREDENTIALS_FILE" >&2
+        return 1
+    fi
+
+    if ! exec 3< "$WEB_CREDENTIALS_FILE" \
+        || ! IFS= read -r username_line <&3 \
+        || ! IFS= read -r password_line <&3; then
+        exec 3<&- || true
+        echo "Error: Web server credentials file is malformed: $WEB_CREDENTIALS_FILE" >&2
+        return 1
+    fi
+    if IFS= read -r extra_line <&3; then
+        exec 3<&-
+        echo "Error: Web server credentials file is malformed: $WEB_CREDENTIALS_FILE" >&2
+        return 1
+    fi
+    exec 3<&-
+
+    if [[ "$LAUNCHER_MODE" == "v2" ]]; then
+        if [[ "$username_line" != "OPENCODE_SERVER_USERNAME=opencode" ]]; then
+            echo "Error: Web server credentials file is malformed: $WEB_CREDENTIALS_FILE" >&2
+            return 1
+        fi
+    elif ! [[ "$username_line" =~ ^OPENCODE_SERVER_USERNAME=(opencode-[0-9a-f]{16})$ ]]; then
+        echo "Error: Web server credentials file is malformed: $WEB_CREDENTIALS_FILE" >&2
+        return 1
+    fi
+    if ! [[ "$password_line" =~ ^OPENCODE_SERVER_PASSWORD=([0-9a-f]{64})$ ]]; then
+        echo "Error: Web server credentials file is malformed: $WEB_CREDENTIALS_FILE" >&2
+        return 1
+    fi
+
+    WEB_USERNAME="${username_line#OPENCODE_SERVER_USERNAME=}"
+    WEB_PASSWORD="${password_line#OPENCODE_SERVER_PASSWORD=}"
+}
+
+prepare_web_credentials_directory() {
+    local mode
+
+    if [[ -L "$WEB_CREDENTIALS_DIR" || ( -e "$WEB_CREDENTIALS_DIR" && ! -d "$WEB_CREDENTIALS_DIR" ) ]]; then
+        echo "Error: Web server credentials directory is not a directory: $WEB_CREDENTIALS_DIR" >&2
+        return 1
+    fi
+    if ! (umask 077; mkdir -p -- "$WEB_CREDENTIALS_DIR"); then
+        echo "Error: Could not create web server credentials directory: $WEB_CREDENTIALS_DIR" >&2
+        return 1
+    fi
+    if [[ -L "$WEB_CREDENTIALS_DIR" || ! -d "$WEB_CREDENTIALS_DIR" || ! -O "$WEB_CREDENTIALS_DIR" ]]; then
+        echo "Error: Web server credentials directory is insecure: $WEB_CREDENTIALS_DIR" >&2
+        return 1
+    fi
+    mode="$(stat_file_mode "$WEB_CREDENTIALS_DIR")" || return 1
+    if [[ "$mode" != "700" ]]; then
+        echo "Error: Web server credentials directory must have mode 0700: $WEB_CREDENTIALS_DIR" >&2
+        return 1
+    fi
+}
+
+create_web_credentials() {
+    local username password
+
+    prepare_web_credentials_directory || return 1
+    if [[ -e "$WEB_CREDENTIALS_FILE" || -L "$WEB_CREDENTIALS_FILE" ]]; then
+        read_web_credentials
+        return
+    fi
+
+    if [[ "$LAUNCHER_MODE" == "v2" ]]; then
+        username="opencode"
+    else
+        username="opencode-$(od -An -N 8 -tx1 /dev/urandom | tr -d ' \n')"
+    fi
+    password="$(od -An -N 32 -tx1 /dev/urandom | tr -d ' \n')"
+    if ! [[ "$username" == "opencode" || "$username" =~ ^opencode-[0-9a-f]{16}$ ]] \
+        || ! [[ "$password" =~ ^[0-9a-f]{64}$ ]]; then
+        echo "Error: Could not generate web server credentials." >&2
+        return 1
+    fi
+
+    WEB_CREDENTIALS_TEMP_FILE="$WEB_CREDENTIALS_DIR/.credentials.$WEB_LAUNCH_TOKEN"
+    if ! (umask 077; set -C; : > "$WEB_CREDENTIALS_TEMP_FILE"); then
+        echo "Error: Could not create temporary web server credentials." >&2
+        return 1
+    fi
+    if ! chmod 600 -- "$WEB_CREDENTIALS_TEMP_FILE" \
+        || ! printf 'OPENCODE_SERVER_USERNAME=%s\nOPENCODE_SERVER_PASSWORD=%s\n' "$username" "$password" > "$WEB_CREDENTIALS_TEMP_FILE"; then
+        rm -f -- "$WEB_CREDENTIALS_TEMP_FILE"
+        WEB_CREDENTIALS_TEMP_FILE=""
+        echo "Error: Could not write web server credentials." >&2
+        return 1
+    fi
+
+    # link(2) refuses to overwrite an existing path, so this publishes the file
+    # atomically. If another launcher won the race, validate and use its file.
+    if ln -- "$WEB_CREDENTIALS_TEMP_FILE" "$WEB_CREDENTIALS_FILE" 2>/dev/null; then
+        rm -f -- "$WEB_CREDENTIALS_TEMP_FILE"
+        WEB_CREDENTIALS_TEMP_FILE=""
+    else
+        rm -f -- "$WEB_CREDENTIALS_TEMP_FILE"
+        WEB_CREDENTIALS_TEMP_FILE=""
+        if [[ -e "$WEB_CREDENTIALS_FILE" || -L "$WEB_CREDENTIALS_FILE" ]]; then
+            read_web_credentials
+            return
+        fi
+        echo "Error: Could not publish web server credentials: $WEB_CREDENTIALS_FILE" >&2
+        return 1
+    fi
+
+    read_web_credentials
+}
+
+create_web_network() {
+    local inspect_result
+
+    # Never attach a new server to a pre-existing network, including one that
+    # happens to carry our labels. It may be a stale or concurrently-created
+    # resource, and its endpoints cannot be safely attributed to this launch.
+    if inspect_web_network; then
+        echo "Error: Web server network '$WEB_NETWORK_NAME' already exists." >&2
+        return 1
+    else
+        inspect_result=$?
+    fi
+    case "$inspect_result" in
+        1) ;;
+        2)
+            echo "Error: Refusing to use unowned web server network '$WEB_NETWORK_NAME'." >&2
+            return 1
+            ;;
+        *)
+            return 1
+            ;;
+    esac
+
+    # Cleanup re-checks this per-launch label, so a signal after Docker creates
+    # the network cannot leave this invocation's network orphaned.
+    if docker network create \
+        --driver bridge \
+        --label "$WEB_OWNERSHIP_LABEL_KEY=$WEB_OWNERSHIP_LABEL_VALUE" \
+        --label "$WEB_LEGACY_LABEL_KEY=$WEB_LAUNCH_TOKEN" \
+        "$WEB_NETWORK_NAME" >/dev/null; then
+        return
+    fi
+
+    # A failed create can race with another creator. Do not adopt the resulting
+    # network, even when its labels look owned.
+    if inspect_web_network; then
+        echo "Error: Web server network '$WEB_NETWORK_NAME' already exists." >&2
+    else
+        inspect_result=$?
+        case "$inspect_result" in
+            1)
+                echo "Error: Could not create web server network '$WEB_NETWORK_NAME'." >&2
+                ;;
+            2)
+                echo "Error: Refusing to use unowned web server network '$WEB_NETWORK_NAME'." >&2
+                ;;
+        esac
+    fi
+    return 1
+}
+
+web_server_http_status() {
+    local status
+
+    if status="$(curl --disable --silent --location --noproxy 127.0.0.1 --output /dev/null --write-out '%{http_code}' --max-time 2 "$@")"; then
+        printf '%s\n' "$status"
+    else
+        printf '%s\n' "$status"
+        return 1
+    fi
+}
+
+wait_for_web_server() {
+    local url="$1" unauthenticated_status="unavailable" authenticated_status="not attempted" attempt
+
+    WEB_CURL_AUTH_FILE="$WEB_CREDENTIALS_DIR/.curl-auth.$WEB_LAUNCH_TOKEN"
+    if ! (umask 077; set -C; : > "$WEB_CURL_AUTH_FILE"); then
+        echo "Error: Could not create temporary authentication configuration." >&2
+        return 1
+    fi
+    if ! printf 'user = "%s:%s"\n' "$WEB_USERNAME" "$WEB_PASSWORD" > "$WEB_CURL_AUTH_FILE"; then
+        rm -f -- "$WEB_CURL_AUTH_FILE"
+        WEB_CURL_AUTH_FILE=""
+        echo "Error: Could not write temporary authentication configuration." >&2
+        return 1
+    fi
+
+    for ((attempt = 1; attempt <= 15; attempt++)); do
+        unauthenticated_status="$(web_server_http_status "$url" || true)"
+        if [[ "$unauthenticated_status" == "401" ]]; then
+            authenticated_status="$(web_server_http_status --config "$WEB_CURL_AUTH_FILE" "$url" || true)"
+            if [[ "$authenticated_status" =~ ^2[0-9]{2}$ ]]; then
+                rm -f -- "$WEB_CURL_AUTH_FILE"
+                WEB_CURL_AUTH_FILE=""
+                return 0
+            fi
+        fi
+        sleep 1
+    done
+
+    rm -f -- "$WEB_CURL_AUTH_FILE"
+    WEB_CURL_AUTH_FILE=""
+    echo "Error: Web server readiness/authentication check failed (unauthenticated status: $unauthenticated_status; authenticated status: $authenticated_status)." >&2
+    return 1
+}
+
+create_web_launch_token() {
+    WEB_LAUNCH_TOKEN="$(od -An -N 16 -tx1 /dev/urandom | tr -d ' \n')"
+    if ! [[ "$WEB_LAUNCH_TOKEN" =~ ^[0-9a-f]{32}$ ]]; then
+        echo "Error: Could not create web server launch token." >&2
+        return 1
+    fi
+}
+
+capture_failed_web_container() {
+    local inspected_container candidate_id candidate_token
+
+    inspected_container="$(docker container inspect \
+        --format "{{.Id}} {{index .Config.Labels \"$WEB_LEGACY_LABEL_KEY\"}}" \
+        "$WEB_CONTAINER_NAME" 2>/dev/null || true)"
+    candidate_id="${inspected_container%% *}"
+    candidate_token="${inspected_container#* }"
+    if [[ "$candidate_id" =~ ^[0-9a-f]{12,64}$ && "$candidate_token" == "$WEB_LAUNCH_TOKEN" ]]; then
+        WEB_CONTAINER_ID="$candidate_id"
+    fi
+}
+
+web_network_id_owned_by_launch() {
+    local inspected_network network_id network_token
+
+    inspected_network="$(docker network inspect \
+        --format "{{.Id}} {{index .Labels \"$WEB_LEGACY_LABEL_KEY\"}}" \
+        "$WEB_NETWORK_NAME" 2>/dev/null || true)"
+    network_id="${inspected_network%% *}"
+    network_token="${inspected_network#* }"
+    if [[ "$network_id" =~ ^[0-9a-f]{12,64}$ && "$network_token" == "$WEB_LAUNCH_TOKEN" ]]; then
+        printf '%s\n' "$network_id"
+    else
+        return 1
+    fi
+}
+
+cleanup_web_temporary_files() {
+    if [[ -n "${WEB_CREDENTIALS_TEMP_FILE:-}" ]]; then
+        rm -f -- "$WEB_CREDENTIALS_TEMP_FILE"
+        WEB_CREDENTIALS_TEMP_FILE=""
+    fi
+    if [[ -n "${WEB_CURL_AUTH_FILE:-}" ]]; then
+        rm -f -- "$WEB_CURL_AUTH_FILE"
+        WEB_CURL_AUTH_FILE=""
+    fi
+}
+
+cleanup_web_server() {
+    local network_id
+
+    if [[ "${WEB_CLEANUP_ACTIVE:-0}" != "1" ]]; then
+        return 0
+    fi
+    cleanup_web_temporary_files
+    if [[ -z "${WEB_CONTAINER_ID:-}" && -n "${WEB_LAUNCH_TOKEN:-}" ]]; then
+        capture_failed_web_container
+    fi
+    if [[ -n "${WEB_CONTAINER_ID:-}" ]]; then
+        echo "Web server logs for '$WEB_CONTAINER_ID':" >&2
+        docker logs "$WEB_CONTAINER_ID" >&2 || true
+        docker rm -f "$WEB_CONTAINER_ID" >&2 || true
+    fi
+    if network_id="$(web_network_id_owned_by_launch)"; then
+        docker network rm "$network_id" >&2 || true
+    fi
+    return 0
+}
+
+emit_web_server_details() {
+    local bind_mode stop_command
+
+    if [[ "$WEB_NETWORK_ACCESSIBLE" == "1" ]]; then
+        bind_mode="network-accessible"
+    else
+        bind_mode="loopback"
+    fi
+    stop_command="$(web_server_stop_command)"
+    cat <<EOF
+OpenCode web server is running.
+  URL: http://127.0.0.1:$WEB_PORT
+  Bind: $bind_mode
+  Basic Auth credentials: $WEB_CREDENTIALS_FILE
+  Container ID: $WEB_CONTAINER_ID
+  Network: $WEB_NETWORK_NAME
+  Stop and remove: $stop_command
+EOF
+}
+
+web_server_stop_command() {
+    local workspace_argument
+
+    printf -v workspace_argument '%q' "$REAL_WORKSPACE"
+    printf '%s --workspace %s --web-server stop --web-port %s' "$LAUNCHER_COMMAND" "$workspace_argument" "$WEB_PORT"
+}
+
+web_resource_is_owned() {
+    local ownership_label="$1" legacy_launch_token="$2"
+
+    [[ "$ownership_label" == "$WEB_OWNERSHIP_LABEL_VALUE" \
+        || "$legacy_launch_token" =~ ^[0-9a-f]{32}$ ]]
+}
+
+inspect_web_container() {
+    local inspected_container ownership_label legacy_launch_token extra
+
+    WEB_INSPECTED_CONTAINER_ID=""
+    WEB_INSPECTED_CONTAINER_RUNNING=""
+    if inspected_container="$(docker container inspect \
+        --format "{{.Id}}|{{index .Config.Labels \"$WEB_OWNERSHIP_LABEL_KEY\"}}|{{index .Config.Labels \"$WEB_LEGACY_LABEL_KEY\"}}|{{.State.Running}}" \
+        "$WEB_CONTAINER_NAME" 2>&1)"; then
+        :
+    elif [[ "$inspected_container" == *"No such container:"* || "$inspected_container" == *"no such container"* || "$inspected_container" == *"no container with name or ID"* ]]; then
+        return 1
+    else
+        echo "Error: Could not inspect web server container '$WEB_CONTAINER_NAME': $inspected_container" >&2
+        return 3
+    fi
+    IFS='|' read -r WEB_INSPECTED_CONTAINER_ID ownership_label legacy_launch_token WEB_INSPECTED_CONTAINER_RUNNING extra <<< "$inspected_container"
+    if [[ "${inspected_container//[^|]/}" != "|||" || -n "$extra" || ! "$WEB_INSPECTED_CONTAINER_ID" =~ ^[0-9a-f]{12,64}$ || ( "$WEB_INSPECTED_CONTAINER_RUNNING" != "true" && "$WEB_INSPECTED_CONTAINER_RUNNING" != "false" ) ]]; then
+        echo "Error: Web server container inspection returned an invalid format for '$WEB_CONTAINER_NAME'." >&2
+        return 3
+    fi
+    web_resource_is_owned "$ownership_label" "$legacy_launch_token" || return 2
+}
+
+inspect_web_network() {
+    local inspected_network ownership_label legacy_launch_token extra
+
+    WEB_INSPECTED_NETWORK_ID=""
+    if inspected_network="$(docker network inspect \
+        --format "{{.Id}}|{{index .Labels \"$WEB_OWNERSHIP_LABEL_KEY\"}}|{{index .Labels \"$WEB_LEGACY_LABEL_KEY\"}}" \
+        "$WEB_NETWORK_NAME" 2>&1)"; then
+        :
+    elif [[ "$inspected_network" == *"No such network:"* || "$inspected_network" == *network*not\ found* ]]; then
+        return 1
+    else
+        echo "Error: Could not inspect web server network '$WEB_NETWORK_NAME': $inspected_network" >&2
+        return 3
+    fi
+    IFS='|' read -r WEB_INSPECTED_NETWORK_ID ownership_label legacy_launch_token extra <<< "$inspected_network"
+    if [[ "${inspected_network//[^|]/}" != "||" || -n "$extra" || ! "$WEB_INSPECTED_NETWORK_ID" =~ ^[0-9a-f]{12,64}$ ]]; then
+        echo "Error: Web server network inspection returned an invalid format for '$WEB_NETWORK_NAME'." >&2
+        return 3
+    fi
+    web_resource_is_owned "$ownership_label" "$legacy_launch_token" || return 2
+}
+
+web_credentials_state() {
+    if [[ -f "$WEB_CREDENTIALS_FILE" && ! -L "$WEB_CREDENTIALS_FILE" ]]; then
+        printf 'present\n'
+    else
+        printf 'missing\n'
+    fi
+}
+
+web_container_bind_mode() {
+    local bindings binding has_binding=0 has_network_accessible_binding=0
+
+    if ! bindings="$(docker container inspect \
+        --format "{{range (index .NetworkSettings.Ports \"$WEB_PORT/tcp\")}}{{println .HostIP}}{{end}}" \
+        "$WEB_INSPECTED_CONTAINER_ID" 2>&1)"; then
+        echo "Error: Could not inspect web server port bindings for '$WEB_INSPECTED_CONTAINER_ID': $bindings" >&2
+        return 1
+    fi
+    while IFS= read -r binding; do
+        [[ -n "$binding" ]] || continue
+        has_binding=1
+        case "$binding" in
+            127.*|::1) ;;
+            0.0.0.0|::|*) has_network_accessible_binding=1 ;;
+        esac
+    done <<< "$bindings"
+
+    if [[ "$has_network_accessible_binding" == "1" ]]; then
+        printf 'network-accessible\n'
+    elif [[ "$has_binding" == "1" ]]; then
+        printf 'loopback\n'
+    else
+        printf 'unknown\n'
+    fi
+}
+
+require_safe_web_server_runtime() {
+    local server_version major_version
+
+    # Podman does not use Docker's published-port implementation. For Docker,
+    # require the Engine release that fixed localhost publication on local L2
+    # networks rather than silently relying on a potentially exposed bind.
+    if [[ "$RUNTIME_VERSION" == podman* ]]; then
+        return 0
+    fi
+    if ! server_version="$(docker version --format '{{.Server.Version}}' 2>/dev/null)" \
+        || ! [[ "$server_version" =~ ^([0-9]+)\. ]]; then
+        echo "Error: Could not determine Docker Engine version; Docker Engine 28 or later is required for --web-server." >&2
+        return 1
+    fi
+    major_version="${BASH_REMATCH[1]}"
+    if ((10#$major_version < 28)); then
+        echo "Error: Docker Engine 28 or later is required for --web-server because older Docker versions can expose localhost-published ports to other hosts on the local network." >&2
+        return 1
+    fi
+}
+
+show_web_server_status() {
+    local container_result=0 network_result=0 service="absent" bind_mode="unavailable"
+    local container_id="absent" network_id="absent" credentials_state
+
+    if inspect_web_container; then
+        container_id="$WEB_INSPECTED_CONTAINER_ID"
+        if [[ "$WEB_INSPECTED_CONTAINER_RUNNING" == "true" ]]; then
+            service="running"
+        else
+            service="stopped"
+        fi
+    else
+        container_result=$?
+    fi
+    if inspect_web_network; then
+        network_id="$WEB_INSPECTED_NETWORK_ID"
+    else
+        network_result=$?
+    fi
+    if [[ "$container_result" == "3" || "$network_result" == "3" ]]; then
+        return 1
+    fi
+    [[ "$container_result" == "2" ]] && container_id="unmanaged"
+    [[ "$network_result" == "2" ]] && network_id="unmanaged"
+    if [[ "$service" == "running" ]]; then
+        bind_mode="$(web_container_bind_mode)" || return 1
+    fi
+    credentials_state="$(web_credentials_state)"
+
+    cat <<EOF
+OpenCode web server status:
+  Service: $service
+  Bind: $bind_mode
+  Container name: $WEB_CONTAINER_NAME
+  Container ID: $container_id
+  Network name: $WEB_NETWORK_NAME
+  Network ID: $network_id
+  Credentials: $credentials_state
+EOF
+}
+
+stop_web_server() {
+    local container_result=0 network_result=0 credentials_state stop_status=0
+
+    if inspect_web_container; then
+        :
+    else
+        container_result=$?
+    fi
+    if inspect_web_network; then
+        :
+    else
+        network_result=$?
+    fi
+    if [[ "$container_result" == "3" || "$network_result" == "3" ]]; then
+        return 1
+    fi
+
+    if [[ "$container_result" == "0" ]]; then
+        if docker rm -f "$WEB_INSPECTED_CONTAINER_ID"; then
+            echo "Removed web server container '$WEB_INSPECTED_CONTAINER_ID'."
+        else
+            echo "Error: Could not remove web server container '$WEB_INSPECTED_CONTAINER_ID'." >&2
+            stop_status=1
+        fi
+    elif [[ "$container_result" == "2" ]]; then
+        echo "Error: Refusing to remove unowned container '$WEB_CONTAINER_NAME'." >&2
+        stop_status=1
+    fi
+
+    if [[ "$network_result" == "0" ]]; then
+        if docker network rm "$WEB_INSPECTED_NETWORK_ID"; then
+            echo "Removed web server network '$WEB_INSPECTED_NETWORK_ID'."
+        else
+            echo "Warning: Could not remove web server network '$WEB_INSPECTED_NETWORK_ID'; attached endpoints were not force-disconnected." >&2
+            stop_status=1
+        fi
+    elif [[ "$network_result" == "2" ]]; then
+        echo "Error: Refusing to remove unowned network '$WEB_NETWORK_NAME'." >&2
+        stop_status=1
+    fi
+
+    credentials_state="$(web_credentials_state)"
+    echo "Web server credentials preserved: $credentials_state ($WEB_CREDENTIALS_FILE)."
+    return "$stop_status"
+}
+
+web_server_exit_trap() {
+    local exit_status="$1"
+
+    trap - EXIT INT TERM
+    cleanup_web_server
+    exit "$exit_status"
+}
+
+web_server_signal_trap() {
+    local exit_status="$1"
+
+    trap - EXIT INT TERM
+    cleanup_web_server
+    exit "$exit_status"
+}
+
+activate_web_server_cleanup() {
+    WEB_CLEANUP_ACTIVE=1
+    trap 'web_server_exit_trap $?' EXIT
+    trap 'web_server_signal_trap 130' INT
+    trap 'web_server_signal_trap 143' TERM
+}
+
+if [[ "$WEB_SERVER" == "1" && "$WEB_SERVER_COMMAND" != "start" ]]; then
+    case "$WEB_SERVER_COMMAND" in
+        stop)
+            stop_web_server
+            exit $?
+            ;;
+        status)
+            show_web_server_status
+            exit $?
+            ;;
+    esac
+fi
+
+# Ensure persistent directories exist before seeding the isolated copies.
+mkdir -p "$OPENCODE_CONTAINER_HOME"/{cache,local}
+mkdir -p "$CONTAINER_DATA_DIR" "$CONTAINER_CACHE_DIR" "$CONTAINER_STATE_DIR"
+
+# XDG_DATA_HOME: refresh auth-adjacent files every normal launch so host logins
+# stay visible. Seed the database and its sidecars only while the container
+# database is absent; cache/state refreshes must never replace it.
+if [[ "$SYNC_CONFIG_ONLY" != "1" && "$OPENCODE_SYNC_HOST_AUTH" != "0" && -d "$HOST_DATA_DIR" ]]; then
+    copy_file "$HOST_DATA_DIR/auth.json"     "$CONTAINER_DATA_DIR/auth.json"
+    copy_file "$HOST_DATA_DIR/account.json"  "$CONTAINER_DATA_DIR/account.json"
+    copy_file "$HOST_DATA_DIR/mcp-auth.json" "$CONTAINER_DATA_DIR/mcp-auth.json"
+    if [[ ! -e "$CONTAINER_DATA_DIR/opencode.db" && ! -L "$CONTAINER_DATA_DIR/opencode.db" ]]; then
+        copy_first_init "$HOST_DATA_DIR/opencode.db"     "$CONTAINER_DATA_DIR/opencode.db"
+        copy_first_init "$HOST_DATA_DIR/opencode.db-shm" "$CONTAINER_DATA_DIR/opencode.db-shm"
+        copy_first_init "$HOST_DATA_DIR/opencode.db-wal" "$CONTAINER_DATA_DIR/opencode.db-wal"
+    fi
+fi
+
+# XDG_CACHE_HOME: seed plugin install tree, models.json, and the opencode-quota
+# pricing/provider caches. These can be large, so they are first-init only.
+if [[ "$OPENCODE_SYNC_CONFIG_CACHE" != "0" && -d "$HOST_CACHE_DIR" ]]; then
+    copy_tree_first_init "$HOST_CACHE_DIR/packages"             "$CONTAINER_CACHE_DIR/packages"
+    copy_config_file    "$HOST_CACHE_DIR/models.json"          "$CONTAINER_CACHE_DIR/models.json"
+    copy_tree_first_init "$HOST_CACHE_DIR/opencode-quota"       "$CONTAINER_CACHE_DIR/opencode-quota"
+    copy_tree_first_init "$HOST_CACHE_DIR/quota-provider-state" "$CONTAINER_CACHE_DIR/quota-provider-state"
+fi
+
+# XDG_STATE_HOME: seed only model/config metadata, never host UI history or
+# locks. plugin-meta.json needs its host XDG paths rewritten for the container.
+if [[ "$OPENCODE_SYNC_CONFIG_STATE" != "0" && -d "$HOST_STATE_DIR" ]]; then
+    copy_config_file "$HOST_STATE_DIR/model.json" "$CONTAINER_STATE_DIR/model.json"
+    copy_config_file "$HOST_STATE_DIR/kv.json"    "$CONTAINER_STATE_DIR/kv.json"
+    copy_plugin_meta "$HOST_STATE_DIR/plugin-meta.json" "$CONTAINER_STATE_DIR/plugin-meta.json"
+fi
+
+# --sync-config only force-refreshes cache/state and deliberately exits before
+# workspace validation or Docker detection.
+if [[ "$SYNC_CONFIG_ONLY" == "1" ]]; then
+    echo "Config sync complete."
+    exit 0
+fi
+
+# Base docker run arguments
+if [[ "$WEB_SERVER" != "1" ]]; then
+    DOCKER_ARGS+=(--rm)
+fi
+DOCKER_ARGS+=(
+    --cap-drop=ALL
+    --security-opt no-new-privileges:true
+    --read-only
+    --tmpfs /tmp:rw,nosuid,nodev,exec,size=256m
+    # OpenCode may initialize XDG_CONFIG_HOME when the host has no config to
+    # mount. Keep that parent ephemeral while nested host config mounts stay RO.
+    --tmpfs /home/opencode/.config:rw,nosuid,nodev,noexec,size=16m
+    --init
+    --env "OPENCODE_PROFILE=$PROFILE"
+    --env HOME=/home/opencode
+    --env EDITOR=nvim
+    --env VISUAL=nvim
+    --env TERM=xterm-256color
+    --env COLORTERM=truecolor
+    --workdir /workspace
+)
+
+# Pass GitHub tokens if they exist
+[[ -n "${GITHUB_TOKEN:-}" ]] && DOCKER_ARGS+=(--env GITHUB_TOKEN="$GITHUB_TOKEN")
+[[ -n "${GH_TOKEN:-}" ]] && DOCKER_ARGS+=(--env GH_TOKEN="$GH_TOKEN")
+
+# Pass standard proxy settings through only when explicitly set.
+pass_env_if_set \
+    HTTP_PROXY \
+    HTTPS_PROXY \
+    ALL_PROXY \
+    NO_PROXY \
+    http_proxy \
+    https_proxy \
+    all_proxy \
+    no_proxy \
+    NODE_EXTRA_CA_CERTS
+
+if [[ "$WEB_SERVER" != "1" && -t 0 && -t 1 ]]; then
+    DOCKER_ARGS+=(-it)
+fi
+
+# Runtime-specific user mapping:
+# - Podman rootless needs keep-id for writable bind mounts.
+# - Docker uses explicit uid:gid mapping.
+RUNTIME_VERSION="$(docker --version 2>/dev/null || true)"
+RW_MOUNT_OPTS="rw"
+RO_MOUNT_OPTS="ro"
+if [[ "$RUNTIME_VERSION" == podman* ]]; then
+    DOCKER_ARGS+=(--userns keep-id)
+    DOCKER_ARGS+=(--user "$(id -u):$(id -g)")
+    # Podman on SELinux hosts needs relabeling for writable bind mounts.
+    # Keep this Podman-only so Docker users keep default mount semantics.
+    RW_MOUNT_OPTS="rw,Z"
+    RO_MOUNT_OPTS="ro,Z"
+else
+    DOCKER_ARGS+=(--user "$(id -u):$(id -g)")
+fi
+
+# SSH Agent forwarding
+if [[ -n "${SSH_AUTH_SOCK:-}" && -S "$SSH_AUTH_SOCK" ]]; then
+    DOCKER_ARGS+=(
+        --env SSH_AUTH_SOCK=/tmp/ssh-agent.sock
+        --volume "$SSH_AUTH_SOCK:/tmp/ssh-agent.sock:ro"
+    )
+fi
+
+# SSH config and known_hosts
+if [[ -f "$HOME/.ssh/config" ]]; then
+    DOCKER_ARGS+=(--volume "$HOME/.ssh/config:/home/opencode/.ssh/config:ro")
+fi
+if [[ -f "$HOME/.ssh/known_hosts" ]]; then
+    DOCKER_ARGS+=(--volume "$HOME/.ssh/known_hosts:/home/opencode/.ssh/known_hosts:ro")
+fi
+
+# Secure profile mounts
+DOCKER_ARGS+=(
+    --volume "$WORKSPACE:/workspace:$RW_MOUNT_OPTS"
+
+    --volume "$OPENCODE_CONTAINER_HOME/local:/home/opencode/.local:$RW_MOUNT_OPTS"
+    --volume "$OPENCODE_CONTAINER_HOME/cache:/home/opencode/.cache:$RW_MOUNT_OPTS"
+)
+
+# OpenCode host config (XDG_CONFIG_HOME) is mounted read-only so the container
+# sees the same opencode.json/agents/plugins/skills as the host. Guard on
+# existence and use the resolved host config dir (honors XDG_CONFIG_HOME).
+if [[ -d "$HOST_CONFIG_DIR" ]]; then
+    DOCKER_ARGS+=(--volume "$HOST_CONFIG_DIR:$CONTAINER_CONFIG_PATH:ro")
+fi
+
+# Set XDG base dirs explicitly so OpenCode resolves config/data/cache/state
+# deterministically inside the container rather than relying on HOME matching
+# the default XDG layout.
+DOCKER_ARGS+=(
+    --env "XDG_CONFIG_HOME=$CONTAINER_HOME/.config"
+    --env "XDG_DATA_HOME=$CONTAINER_HOME/.local/share"
+    --env "XDG_CACHE_HOME=$CONTAINER_HOME/.cache"
+    --env "XDG_STATE_HOME=$CONTAINER_HOME/.local/state"
+)
+
+# Git config
+if [[ -f "$HOME/.gitconfig" ]]; then
+    DOCKER_ARGS+=(--volume "$HOME/.gitconfig:/home/opencode/.gitconfig:ro")
+fi
+
+# GitHub CLI config
+if [[ -d "$HOME/.config/gh" ]]; then
+    DOCKER_ARGS+=(--volume "$HOME/.config/gh:/home/opencode/.config/gh:ro")
+fi
+
+# Load config overrides with precedence:
+# 1) OPENCODE_CONFIG_CONTENT env var (can be set in opencode-local.sh or shell env)
+# 2) OPENCODE_OVERRIDES_FILE path (can be set in opencode-local.sh)
+# 3) No extra config content
+if [[ -n "${OPENCODE_CONFIG_CONTENT:-}" ]]; then
+    DOCKER_ARGS+=(--env "OPENCODE_CONFIG_CONTENT=$OPENCODE_CONFIG_CONTENT")
+elif [[ -n "${OPENCODE_OVERRIDES_FILE:-}" && -f "${OPENCODE_OVERRIDES_FILE}" ]]; then
+    DOCKER_ARGS+=(--env "OPENCODE_CONFIG_CONTENT=$(tr -d '\n' <"$OPENCODE_OVERRIDES_FILE")")
+fi
+
+# Native profile mounts
+if [[ "$PROFILE" == "native" ]]; then
+    if [[ -d "$HOME/.config/nvim" ]]; then
+        DOCKER_ARGS+=(--volume "$HOME/.config/nvim:/home/opencode/.config/nvim:ro")
+    fi
+elif [[ "$PROFILE" != "secure" ]]; then
+    echo "Error: Unknown profile '$PROFILE'. Use 'secure' or 'native'." >&2
+    exit 1
+fi
+
+# Stage selected executables only after all non-launch validation has passed.
+# The source files are never mounted: the temporary copies are the only paths
+# relabeled by Podman and mounted into the container.
+if ((${#WITH_TOOLS[@]} != 0)); then
+    if ! prepare_tool_staging; then
+        exit 1
+    fi
+    # Keep bind syntax accepted by both Docker and Podman. RO_MOUNT_OPTS adds
+    # Podman's SELinux relabel only on Podman; file mode and container
+    # hardening provide the remaining boundary for this snapshot.
+    TOOL_MOUNT_OPTS="$RO_MOUNT_OPTS"
+    DOCKER_ARGS+=(
+        --volume "$TOOLS_STAGE_DIR:$TOOLS_CONTAINER_PATH:$TOOL_MOUNT_OPTS"
+        --env "PATH=$TOOLS_CONTAINER_PATH:$CONTAINER_DEFAULT_PATH"
+    )
+fi
+
+# Execute docker run
+if [[ "$WEB_SERVER" == "1" ]]; then
+    if ! command -v curl >/dev/null 2>&1; then
+        echo "Error: curl is required to verify the web server." >&2
+        exit 1
+    fi
+    if [[ ! -f "$WEB_ENTRYPOINT" ]]; then
+        echo "Error: Web server entrypoint is not a regular file: $WEB_ENTRYPOINT" >&2
+        exit 1
+    fi
+    require_safe_web_server_runtime || exit 1
+    if inspect_web_container; then
+        echo "Error: Web server container '$WEB_CONTAINER_NAME' already exists." >&2
+        echo "Stop and remove it with: $(web_server_stop_command)" >&2
+        exit 1
+    else
+        container_inspect_result=$?
+        if [[ "$container_inspect_result" != "1" ]]; then
+            if [[ "$container_inspect_result" == "2" ]]; then
+                echo "Error: Web server container '$WEB_CONTAINER_NAME' already exists but is not owned by this launcher." >&2
+                echo "Stop and remove it with: $(web_server_stop_command)" >&2
+            fi
+            exit 1
+        fi
+    fi
+    if [[ "$WEB_NETWORK_ACCESSIBLE" == "1" ]]; then
+        echo "WARNING: --network-accessible exposes this HTTP server and its Basic Auth credentials on your LAN. The server can access your workspace and provider credentials." >&2
+        WEB_BIND_ADDRESS="0.0.0.0"
+    else
+        WEB_BIND_ADDRESS="127.0.0.1"
+    fi
+    create_web_launch_token
+    WEB_CONTAINER_ID=""
+    WEB_CREDENTIALS_TEMP_FILE=""
+    WEB_CURL_AUTH_FILE=""
+    activate_web_server_cleanup
+    create_web_credentials
+    create_web_network
+    DOCKER_ARGS+=(
+        --detach
+        --name "$WEB_CONTAINER_NAME"
+        --label "$WEB_OWNERSHIP_LABEL_KEY=$WEB_OWNERSHIP_LABEL_VALUE"
+        --label "$WEB_LEGACY_LABEL_KEY=$WEB_LAUNCH_TOKEN"
+        --publish "${WEB_BIND_ADDRESS}:${WEB_PORT}:${WEB_PORT}"
+        --volume "$WEB_CREDENTIALS_FILE:/tmp/opencode-web-credentials:$RO_MOUNT_OPTS"
+        --volume "$WEB_ENTRYPOINT:/tmp/opencode-web-entrypoint:$RO_MOUNT_OPTS"
+        --env "OPENCODE_WEB_VARIANT=$LAUNCHER_MODE"
+        --network "$WEB_NETWORK_NAME"
+        # Override the image entrypoint so custom or stale images cannot skip
+        # credential loading; /bin/sh executes the mounted wrapper below.
+        --entrypoint /bin/sh
+    )
+
+    if ! WEB_CONTAINER_ID="$(docker run "${DOCKER_ARGS[@]}" "$IMAGE" /tmp/opencode-web-entrypoint "$WEB_PORT")" \
+        || ! [[ "$WEB_CONTAINER_ID" =~ ^[0-9a-f]{12,64}$ ]]; then
+        WEB_CONTAINER_ID=""
+        capture_failed_web_container
+        echo "Error: Could not start web server container '$WEB_CONTAINER_NAME'." >&2
+        exit 1
+    fi
+    if ! wait_for_web_server "http://127.0.0.1:$WEB_PORT$WEB_HEALTH_PATH"; then
+        exit 1
+    fi
+
+    if ! emit_web_server_details; then
+        echo "Error: Could not report web server launch details." >&2
+        exit 1
+    fi
+
+    WEB_CLEANUP_ACTIVE=0
+    trap - EXIT INT TERM
+    exit 0
+fi
+
+if [[ ${#ARGS[@]} -eq 0 ]]; then
+    ARGS=("$OPENCODE_EXECUTABLE")
+elif [[ "$RAW_COMMAND" != "1" ]]; then
+    ARGS=("$OPENCODE_EXECUTABLE" "${ARGS[@]}")
+fi
+
+if ((${#WITH_TOOLS[@]} != 0)); then
+    # Do not exec here: an exec'd launcher cannot remove the host-side
+    # snapshot. Explicitly duplicate stdin because Bash gives asynchronous
+    # commands /dev/null when job control is disabled. This retains the former
+    # interactive and raw-command behavior while we forward terminal signals
+    # to the Docker CLI and wait for it to exit.
+    TOOLS_CHILD_PID=""
+    TOOLS_CHILD_REAPED=0
+    TOOLS_PENDING_SIGNAL=""
+    trap 'tool_launch_exit_trap $?' EXIT
+    trap 'forward_tool_launch_signal INT' INT
+    trap 'forward_tool_launch_signal TERM' TERM
+    trap 'forward_tool_launch_signal HUP' HUP
+
+    docker run "${DOCKER_ARGS[@]}" "$IMAGE" "${ARGS[@]}" <&0 &
+    TOOLS_CHILD_PID=$!
+    if [[ -n "$TOOLS_PENDING_SIGNAL" ]]; then
+        forward_tool_launch_signal "$TOOLS_PENDING_SIGNAL"
+        TOOLS_PENDING_SIGNAL=""
+    fi
+
+    docker_status=0
+    while :; do
+        if wait "$TOOLS_CHILD_PID"; then
+            docker_status=$?
+            break
+        else
+            docker_status=$?
+        fi
+        # Bash can interrupt wait(2) with the signal status while the Docker
+        # CLI is still alive. Reap it rather than exiting and leaving a
+        # container behind. A real Docker exit status is returned directly.
+        case "$docker_status" in
+            129|130|143)
+                if kill -0 "$TOOLS_CHILD_PID" 2>/dev/null; then
+                    continue
+                fi
+                ;;
+        esac
+        break
+    done
+    TOOLS_CHILD_REAPED=1
+    cleanup_tool_staging
+    trap - EXIT
+    trap - INT TERM HUP
+    exit "$docker_status"
+fi
+
+exec docker run "${DOCKER_ARGS[@]}" "$IMAGE" "${ARGS[@]}"
+\r'* ]]; then
+            echo "Error: OPENCODE_PLUGIN_PATHS entries must be absolute paths without newlines: $spec" >&2
+            return 1
+        fi
+        resolved="$(resolve_path "$spec" 2>/dev/null || true)"
+        if [[ -z "$resolved" || ! -d "$resolved" ]]; then
+            echo "Error: OpenCode plugin path is not a directory: $spec" >&2
+            return 1
+        fi
+        if [[ "$resolved" == "/" || "$resolved" == "$real_home" ]]; then
+            echo "Error: Refusing to mount broad plugin path: $resolved" >&2
+            return 1
+        fi
+        DOCKER_ARGS+=(--volume "$resolved:$resolved:$RO_MOUNT_OPTS")
+    done
+}
+
 sanitize_web_container_name() {
     local raw="$1"
     local sanitized
