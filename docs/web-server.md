@@ -1,43 +1,15 @@
 # Web Server and Remote Attach
 
-The stable launcher's `--web-server` mode runs `opencode web` inside a detached
-container with persistent Basic Auth credentials. The side-by-side
-`opencode2-container --web-server` mode instead runs `opencode2 serve` and
-checks `/api/health`; it keeps the same containment, credential validation, and
-loopback/network opt-in protections. See the
-[README](../README.md#quick-start) for the built-in lifecycle commands
-(`start`, `stop`, `status`, `--web-port`, `--network-accessible`).
+The launcher's `--web-server` mode runs the current `opencode web` binary from the configured image inside a detached container with persistent Basic Auth credentials. The image follows `ghcr.io/anomalyco/opencode:latest`; there is no separate pinned preview server.
+
+See the [README](../README.md#quick-start) for the built-in lifecycle commands (`start`, `stop`, `status`, `--web-port`, `--network-accessible`).
 
 This doc covers two related patterns the launcher does not manage for you:
 
-1. Running the web server as a **systemd service** (auto-start, restart,
-   status) using a custom container image and port.
-2. **Attaching a TUI** to a running web server, including the path
-   translation you need when the server runs inside a container.
+1. Running the web server as a **systemd service** (auto-start, restart, status) using a custom container image and port.
+2. **Attaching a TUI** to a running web server, including the path translation you need when the server runs inside a container.
 
-## OpenCode 2 preview client
-
-The project install does not add a host `opencode2` command. For a server URL
-that is reachable from a container, use the contained preview client:
-
-```bash
-opencode2-container --server http://host.containers.internal:4096
-```
-
-The contained client cannot normally reach a loopback-only host listener at
-`127.0.0.1`; the example requires a server published on a container-reachable
-host address (Podman provides `host.containers.internal`; Docker may require
-its equivalent host-gateway address). For the default loopback server, install
-the separate beta host CLI and connect with `--server`:
-
-```bash
-opencode2 --server http://127.0.0.1:4096
-```
-
-The v2 server uses HTTP Basic Auth with username `opencode`; use the generated
-password from the credentials file reported by `opencode2-container`. The v2
-preview is beta-only, currently x86_64-musl and arm64-musl in this image, and
-v1 plugins do not work with it.
+The historical `opencode2-*` commands are compatibility aliases and use the same current OpenCode web-server implementation.
 
 ## systemd service
 
@@ -111,6 +83,8 @@ Notes:
   non-SELinux systems if you hit label errors.
 - The host OpenCode config directory is mounted read-only so the container
   sees the same `opencode.json`, agents, skills, and commands as the host.
+- A local `file://` plugin outside `/workspace` needs a narrow read-only mount at the same absolute path. The normal launcher handles this through `OPENCODE_PLUGIN_PATHS`; reproduce that mount explicitly in a hand-written systemd unit.
+- TypeSafe-backed plugins need `TYPESAFE_API_KEY` in the service environment. Keep it in a private environment file, not in this repository.
 - Container state (`~/.local`, `~/.cache`) is isolated under
   `~/.local/share/opencode-container/` so container sessions do not collide
   with host OpenCode sessions. Run `make sync-config` (or
