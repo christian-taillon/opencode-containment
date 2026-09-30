@@ -53,7 +53,7 @@ doctor: ## Check prerequisites
 	@docker image inspect $(IMAGE_NAME) >/dev/null 2>&1 && echo "✅ Image $(IMAGE_NAME) is built" || echo "❌ Image $(IMAGE_NAME) is not built"
 	@[ -n "$$SSH_AUTH_SOCK" ] && [ -S "$$SSH_AUTH_SOCK" ] && echo "✅ SSH agent is running" || echo "⚠️ SSH agent is not running or socket not found"
 	@[ -d "$(OPENCODE_CONTAINER_HOME)" ] && echo "✅ Persistent directory exists" || echo "❌ Persistent directory does not exist"
-	@jev="${OPENCODE_JEV_PLUGIN_DIR:-$HOME/github/opencode-jev-compactor}"; \
+	@jev="${OPENCODE_JEV_PLUGIN_DIR-$HOME/github/opencode-jev-compactor}"; \
 	if [ -f "$jev/src/index.ts" ]; then echo "✅ Jev plugin checkout: $jev"; else echo "⚠️ Jev plugin checkout not found at $jev"; fi; \
 	if [ -n "${TYPESAFE_API_KEY:-}" ]; then echo "✅ TYPESAFE_API_KEY is set"; else echo "⚠️ TYPESAFE_API_KEY is not set"; fi; \
 	if grep -Fxq 'api.typesafe.ai:443' config/sbx-network-allow.txt; then echo "✅ TypeSafe sandbox network rule present"; else echo "❌ TypeSafe sandbox network rule missing"; fi
