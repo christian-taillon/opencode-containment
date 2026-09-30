@@ -51,40 +51,22 @@ if [[ -f "$LOCAL_HOOK" ]]; then
     source "$LOCAL_HOOK"
 fi
 
-# The v2 wrappers select this mode with a private positional marker. Resolve it
-# after the local hook so environment defaults cannot change the executable.
-LAUNCHER_MODE="stable"
-if [[ "${1:-}" == "--__opencode2" ]]; then
-    LAUNCHER_MODE="v2"
-    shift
-fi
-if [[ "$LAUNCHER_MODE" == "v2" ]]; then
-    LAUNCHER_COMMAND="opencode2-sandbox"
-    OPENCODE_EXECUTABLE="opencode2"
-else
-    LAUNCHER_COMMAND="opencode-sandbox"
-    OPENCODE_EXECUTABLE="opencode"
-fi
+# Docker Sandboxes uses the same OpenCode latest containment image by default.
+LAUNCHER_COMMAND="opencode-sandbox"
+OPENCODE_EXECUTABLE="opencode"
 
 PROFILE="${OPENCODE_PROFILE:-native}"
 WORKSPACE="${OPENCODE_WORKSPACE:-$PWD}"
 SANDBOX_NAME="${OPENCODE_SANDBOX_NAME:-}"
 SANDBOX_MEMORY="${OPENCODE_SANDBOX_MEMORY:-8g}"
 SANDBOX_CPUS="${OPENCODE_SANDBOX_CPUS:-4}"
-if [[ "$LAUNCHER_MODE" == "v2" ]]; then
-    SANDBOX_TEMPLATE="${OPENCODE2_SANDBOX_TEMPLATE:-${OPENCODE_SANDBOX_TEMPLATE:-localhost/opencode-containment:latest}}"
-else
-    SANDBOX_TEMPLATE="${OPENCODE_SANDBOX_TEMPLATE:-}"
-fi
+SANDBOX_TEMPLATE="${OPENCODE_SANDBOX_TEMPLATE:-localhost/opencode-containment:latest}"
 SBX_BIN="${OPENCODE_SBX_BIN:-sbx}"
 OPENCODE_CONFIG_DIR="${OPENCODE_CONFIG_DIR:-${XDG_CONFIG_HOME:-$HOME/.config}/opencode}"
 OPENCODE_HOST_STATE_DIR="${OPENCODE_HOST_STATE_DIR:-${XDG_DATA_HOME:-$HOME/.local/share}/opencode}"
-if [[ "$LAUNCHER_MODE" == "v2" ]]; then
-    OPENCODE_SANDBOX_STATE_DIR="${OPENCODE2_SANDBOX_STATE_DIR:-${OPENCODE_SANDBOX_STATE_DIR:-${XDG_DATA_HOME:-$HOME/.local/share}/opencode2-sandbox}}"
-else
-    OPENCODE_SANDBOX_STATE_DIR="${OPENCODE_SANDBOX_STATE_DIR:-${XDG_DATA_HOME:-$HOME/.local/share}/opencode-sandbox}"
-fi
+OPENCODE_SANDBOX_STATE_DIR="${OPENCODE_SANDBOX_STATE_DIR:-${XDG_DATA_HOME:-$HOME/.local/share}/opencode-sandbox}"
 OPENCODE_SYNC_HOST_AUTH="${OPENCODE_SYNC_HOST_AUTH:-1}"
+OPENCODE_LOCAL_PLUGIN_DIRS="${OPENCODE_LOCAL_PLUGIN_DIRS:-}"
 
 show_help() {
     cat <<EOF
@@ -114,8 +96,8 @@ Notes:
     local host mounts and overrideable docker args do not apply here.
   - Default sandbox sizing is explicit for predictable host impact.
   - Pass OpenCode arguments after "--".
-  - This launcher runs '$OPENCODE_EXECUTABLE'. The v2 preview uses the local
-    containment image as its default sandbox template.
+  - The default template is the local opencode-containment image, which is
+    built FROM ghcr.io/anomalyco/opencode:latest.
 
 Examples:
   $LAUNCHER_COMMAND
@@ -189,11 +171,7 @@ if [[ "$REAL_WORKSPACE" != "$START_DIR" && "$REAL_WORKSPACE" != "$START_DIR"/* ]
 fi
 
 if [[ -z "$SANDBOX_NAME" ]]; then
-    if [[ "$LAUNCHER_MODE" == "v2" ]]; then
-        SANDBOX_NAME="opencode2-$(sanitize_sandbox_name "$(basename "$REAL_WORKSPACE")")"
-    else
-        SANDBOX_NAME="opencode-$(sanitize_sandbox_name "$(basename "$REAL_WORKSPACE")")"
-    fi
+    SANDBOX_NAME="opencode-$(sanitize_sandbox_name "$(basename "$REAL_WORKSPACE")")"
 fi
 
 if ! command -v "$SBX_BIN" >/dev/null 2>&1; then
@@ -215,6 +193,187 @@ CREATE_ARGS=(--name "$SANDBOX_NAME")
 [[ -n "$SANDBOX_TEMPLATE" ]] && CREATE_ARGS+=(--template "$SANDBOX_TEMPLATE")
 
 EXTRA_WORKSPACES=()
+LOCAL_PLUGIN_PATHS=()
+
+if [[ -n "$OPENCODE_LOCAL_PLUGIN_DIRS" ]]; then
+    IFS=':' read -r -a requested_plugins <<< "$OPENCODE_LOCAL_PLUGIN_DIRS"
+    for plugin_path in "${requested_plugins[@]}"; do
+        [[ -n "$plugin_path" ]] || continue
+        if [[ "$plugin_path" == *
+    REAL_OPENCODE_CONFIG_DIR="$(resolve_path "$OPENCODE_CONFIG_DIR")"
+    EXTRA_WORKSPACES+=("$REAL_OPENCODE_CONFIG_DIR:ro")
+else
+    REAL_OPENCODE_CONFIG_DIR=""
+fi
+
+SANDBOX_OPENCODE_HOME="/home/agent"
+if [[ -n "$REAL_OPENCODE_CONFIG_DIR" && "$REAL_OPENCODE_CONFIG_DIR" == */.config/opencode ]]; then
+    SANDBOX_OPENCODE_HOME="${REAL_OPENCODE_CONFIG_DIR%/.config/opencode}"
+fi
+
+if [[ "$OPENCODE_SYNC_HOST_AUTH" != "0" && -f "$AUTH_MIRROR_DIR/auth.json" ]]; then
+    REAL_AUTH_MIRROR_DIR="$(resolve_path "$AUTH_MIRROR_DIR")"
+    EXTRA_WORKSPACES+=("$REAL_AUTH_MIRROR_DIR:ro")
+else
+    REAL_AUTH_MIRROR_DIR=""
+fi
+
+if ! "$SBX_BIN" ls -q 2>/dev/null | grep -Fxq "$SANDBOX_NAME"; then
+    "$SBX_BIN" create "${CREATE_ARGS[@]}" opencode "$REAL_WORKSPACE" "${EXTRA_WORKSPACES[@]}"
+else
+    for plugin_path in "${LOCAL_PLUGIN_PATHS[@]}"; do
+        if ! "$SBX_BIN" exec "$SANDBOX_NAME" test -d "$plugin_path" >/dev/null 2>&1; then
+            echo "Error: Existing sandbox '$SANDBOX_NAME' does not contain local plugin mount: $plugin_path" >&2
+            echo "Remove/recreate the sandbox after changing OPENCODE_LOCAL_PLUGIN_DIRS." >&2
+            exit 1
+        fi
+    done
+fi
+
+BOOTSTRAP_SCRIPT='set -eu
+mkdir -p "$HOME/.config" "$HOME/.local/share/opencode"
+
+if [ -n "${OPENCODE_HOST_CONFIG:-}" ]; then
+    if [ ! -d "$OPENCODE_HOST_CONFIG" ]; then
+        echo "Warning: host OpenCode config is not mounted in sandbox; recreate $SANDBOX_NAME to enable read-only config sharing." >&2
+    fi
+fi
+
+if [ "${OPENCODE_AUTH_SYNC:-1}" = "0" ]; then
+    if [ -L "$HOME/.local/share/opencode/auth.json" ]; then
+        rm -f "$HOME/.local/share/opencode/auth.json"
+    fi
+elif [ -n "${OPENCODE_AUTH_MIRROR:-}" ]; then
+    if [ -f "$OPENCODE_AUTH_MIRROR" ]; then
+        if [ ! -L "$HOME/.local/share/opencode/auth.json" ] || [ "$(readlink "$HOME/.local/share/opencode/auth.json" 2>/dev/null || true)" != "$OPENCODE_AUTH_MIRROR" ]; then
+            rm -f "$HOME/.local/share/opencode/auth.json"
+            ln -s "$OPENCODE_AUTH_MIRROR" "$HOME/.local/share/opencode/auth.json"
+        fi
+    else
+        echo "Warning: host OpenCode auth mirror is not mounted in sandbox; recreate $SANDBOX_NAME to enable read-only auth sharing." >&2
+    fi
+fi'
+
+"$SBX_BIN" exec \
+    -e "SANDBOX_NAME=$SANDBOX_NAME" \
+    -e "OPENCODE_HOST_CONFIG=$REAL_OPENCODE_CONFIG_DIR" \
+    -e "OPENCODE_AUTH_SYNC=$OPENCODE_SYNC_HOST_AUTH" \
+    -e "OPENCODE_AUTH_MIRROR=${REAL_AUTH_MIRROR_DIR:+$REAL_AUTH_MIRROR_DIR/auth.json}" \
+    "$SANDBOX_NAME" sh -lc "$BOOTSTRAP_SCRIPT"
+
+EXEC_ARGS=(
+    -e "OPENCODE_PROFILE=$PROFILE"
+    -e "HOME=$SANDBOX_OPENCODE_HOME"
+    -e "XDG_CONFIG_HOME=$SANDBOX_OPENCODE_HOME/.config"
+    -e "XDG_DATA_HOME=/home/agent/.local/share"
+    -e "XDG_CACHE_HOME=/home/agent/.cache"
+    -e "XDG_STATE_HOME=/home/agent/.local/state"
+    -w "$REAL_WORKSPACE"
+)
+
+if [[ -n "${TYPESAFE_API_KEY:-}" ]]; then
+    EXEC_ARGS+=(-e "TYPESAFE_API_KEY=$TYPESAFE_API_KEY")
+fi
+
+if [[ -t 0 && -t 1 ]]; then
+    EXEC_ARGS+=(-i -t)
+fi
+
+exec "$SBX_BIN" exec "${EXEC_ARGS[@]}" "$SANDBOX_NAME" "$OPENCODE_EXECUTABLE" "${ARGS[@]}"
+\n'* || "$plugin_path" == *
+    REAL_OPENCODE_CONFIG_DIR="$(resolve_path "$OPENCODE_CONFIG_DIR")"
+    EXTRA_WORKSPACES+=("$REAL_OPENCODE_CONFIG_DIR:ro")
+else
+    REAL_OPENCODE_CONFIG_DIR=""
+fi
+
+SANDBOX_OPENCODE_HOME="/home/agent"
+if [[ -n "$REAL_OPENCODE_CONFIG_DIR" && "$REAL_OPENCODE_CONFIG_DIR" == */.config/opencode ]]; then
+    SANDBOX_OPENCODE_HOME="${REAL_OPENCODE_CONFIG_DIR%/.config/opencode}"
+fi
+
+if [[ "$OPENCODE_SYNC_HOST_AUTH" != "0" && -f "$AUTH_MIRROR_DIR/auth.json" ]]; then
+    REAL_AUTH_MIRROR_DIR="$(resolve_path "$AUTH_MIRROR_DIR")"
+    EXTRA_WORKSPACES+=("$REAL_AUTH_MIRROR_DIR:ro")
+else
+    REAL_AUTH_MIRROR_DIR=""
+fi
+
+if ! "$SBX_BIN" ls -q 2>/dev/null | grep -Fxq "$SANDBOX_NAME"; then
+    "$SBX_BIN" create "${CREATE_ARGS[@]}" opencode "$REAL_WORKSPACE" "${EXTRA_WORKSPACES[@]}"
+fi
+
+BOOTSTRAP_SCRIPT='set -eu
+mkdir -p "$HOME/.config" "$HOME/.local/share/opencode"
+
+if [ -n "${OPENCODE_HOST_CONFIG:-}" ]; then
+    if [ ! -d "$OPENCODE_HOST_CONFIG" ]; then
+        echo "Warning: host OpenCode config is not mounted in sandbox; recreate $SANDBOX_NAME to enable read-only config sharing." >&2
+    fi
+fi
+
+if [ "${OPENCODE_AUTH_SYNC:-1}" = "0" ]; then
+    if [ -L "$HOME/.local/share/opencode/auth.json" ]; then
+        rm -f "$HOME/.local/share/opencode/auth.json"
+    fi
+elif [ -n "${OPENCODE_AUTH_MIRROR:-}" ]; then
+    if [ -f "$OPENCODE_AUTH_MIRROR" ]; then
+        if [ ! -L "$HOME/.local/share/opencode/auth.json" ] || [ "$(readlink "$HOME/.local/share/opencode/auth.json" 2>/dev/null || true)" != "$OPENCODE_AUTH_MIRROR" ]; then
+            rm -f "$HOME/.local/share/opencode/auth.json"
+            ln -s "$OPENCODE_AUTH_MIRROR" "$HOME/.local/share/opencode/auth.json"
+        fi
+    else
+        echo "Warning: host OpenCode auth mirror is not mounted in sandbox; recreate $SANDBOX_NAME to enable read-only auth sharing." >&2
+    fi
+fi'
+
+"$SBX_BIN" exec \
+    -e "SANDBOX_NAME=$SANDBOX_NAME" \
+    -e "OPENCODE_HOST_CONFIG=$REAL_OPENCODE_CONFIG_DIR" \
+    -e "OPENCODE_AUTH_SYNC=$OPENCODE_SYNC_HOST_AUTH" \
+    -e "OPENCODE_AUTH_MIRROR=${REAL_AUTH_MIRROR_DIR:+$REAL_AUTH_MIRROR_DIR/auth.json}" \
+    "$SANDBOX_NAME" sh -lc "$BOOTSTRAP_SCRIPT"
+
+EXEC_ARGS=(
+    -e "OPENCODE_PROFILE=$PROFILE"
+    -e "HOME=$SANDBOX_OPENCODE_HOME"
+    -e "XDG_CONFIG_HOME=$SANDBOX_OPENCODE_HOME/.config"
+    -e "XDG_DATA_HOME=/home/agent/.local/share"
+    -e "XDG_CACHE_HOME=/home/agent/.cache"
+    -e "XDG_STATE_HOME=/home/agent/.local/state"
+    -w "$REAL_WORKSPACE"
+)
+
+if [[ -t 0 && -t 1 ]]; then
+    EXEC_ARGS+=(-i -t)
+fi
+
+exec "$SBX_BIN" exec "${EXEC_ARGS[@]}" "$SANDBOX_NAME" "$OPENCODE_EXECUTABLE" "${ARGS[@]}"
+\r'* || ! -d "$plugin_path" ]]; then
+            echo "Error: Invalid local OpenCode plugin directory: $plugin_path" >&2
+            exit 1
+        fi
+        resolved_plugin="$(resolve_path "$plugin_path")" || {
+            echo "Error: Could not resolve local OpenCode plugin directory: $plugin_path" >&2
+            exit 1
+        }
+        if [[ "$resolved_plugin" == "/" || "$resolved_plugin" == "$REAL_HOME" ]]; then
+            echo "Error: Refusing broad local plugin mount: $resolved_plugin" >&2
+            exit 1
+        fi
+        duplicate=0
+        for existing_plugin in "${LOCAL_PLUGIN_PATHS[@]}"; do
+            if [[ "$existing_plugin" == "$resolved_plugin" ]]; then
+                duplicate=1
+                break
+            fi
+        done
+        [[ "$duplicate" == "0" ]] || continue
+        LOCAL_PLUGIN_PATHS+=("$resolved_plugin")
+        EXTRA_WORKSPACES+=("$resolved_plugin:ro")
+    done
+fi
+
 if [[ -d "$OPENCODE_CONFIG_DIR" ]]; then
     REAL_OPENCODE_CONFIG_DIR="$(resolve_path "$OPENCODE_CONFIG_DIR")"
     EXTRA_WORKSPACES+=("$REAL_OPENCODE_CONFIG_DIR:ro")
