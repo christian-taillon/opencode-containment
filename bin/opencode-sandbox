@@ -102,8 +102,8 @@ Notes:
     local host mounts and overrideable docker args do not apply here.
   - Default sandbox sizing is explicit for predictable host impact.
   - Pass OpenCode arguments after "--".
-  - This launcher runs '$OPENCODE_EXECUTABLE'. The v2 preview uses the local
-    containment image as its default sandbox template.
+  - This launcher runs '$OPENCODE_EXECUTABLE' from the latest containment image.
+    Legacy opencode2-* names are compatibility aliases to the same runtime.
 
 Examples:
   $LAUNCHER_COMMAND
