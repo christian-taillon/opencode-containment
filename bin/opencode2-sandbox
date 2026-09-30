@@ -8,4 +8,6 @@ while [[ -h "$SOURCE" ]]; do
     [[ "$SOURCE" == /* ]] || SOURCE="$SOURCE_DIR/$SOURCE"
 done
 SCRIPT_DIR="$(cd "$(dirname "$SOURCE")" && pwd -P)"
-exec "$SCRIPT_DIR/opencode-sandbox" --__opencode2 "$@"
+
+echo "Warning: $(basename "$0") is a compatibility alias; using OpenCode latest." >&2
+exec "$SCRIPT_DIR/opencode-sandbox" "$@"
