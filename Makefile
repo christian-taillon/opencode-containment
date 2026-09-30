@@ -1,4 +1,4 @@
-.PHONY: help build update setup run run-native run-secure run-sandbox run-opencode2 run-opencode2-sandbox setup-sandbox-policy doctor doctor-sandbox sync-config clean clean-sandbox-smoke shell-install
+.PHONY: help build update setup setup-jev run run-native run-secure run-sandbox run-opencode2 run-opencode2-sandbox setup-sandbox-policy doctor doctor-sandbox sync-config clean clean-sandbox-smoke shell-install
 
 # Project variables
 PROJECT_NAME := opencode-containment
@@ -22,6 +22,13 @@ setup: ## Create persistent directories for container cache/state
 	@echo "Running setup..."
 	@mkdir -p $(OPENCODE_CONTAINER_HOME)/cache $(OPENCODE_CONTAINER_HOME)/local
 	@echo "Setup complete."
+
+setup-jev: ## Install/build the trusted local Jev compaction plugin checkout
+	@jev="$${OPENCODE_JEV_PLUGIN_DIR-$$HOME/github/opencode-jev-compactor}"; \
+	if [ -z "$$jev" ]; then echo "Error: OPENCODE_JEV_PLUGIN_DIR is disabled." >&2; exit 1; fi; \
+	if [ ! -f "$$jev/package.json" ]; then echo "Error: Jev plugin checkout not found at $$jev" >&2; exit 1; fi; \
+	command -v corepack >/dev/null 2>&1 || { echo "Error: corepack is required to build the Jev plugin." >&2; exit 1; }; \
+	cd "$$jev" && corepack pnpm install --frozen-lockfile && corepack pnpm run typecheck && corepack pnpm run build && corepack pnpm test
 
 run: ## Run container with native profile (best UX)
 	@bash bin/opencode-container --profile native
