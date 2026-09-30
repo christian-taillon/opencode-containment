@@ -217,7 +217,7 @@ Sandbox auto-naming: when `OPENCODE_SANDBOX_NAME` is not set, the launcher names
 
 Host auth mirror: host OpenCode auth is copied into a sandbox-specific read-only auth mirror (`$OPENCODE_SANDBOX_STATE_DIR/auth/auth.json`). On each launch a bootstrap script ensures the sandbox's `~/.local/share/opencode/auth.json` points to that mirror via a symlink. The mirror is refreshed from the host every launch; the symlink only recreates itself when needed.
 
-Default network allowlist: the committed `config/sbx-network-allow.txt` only includes Ollama Cloud domains. If you use another model or provider API, add its domains narrowly (for example `api.example.com:443`) and run `make setup-sandbox-policy` before launching the sandbox.
+Default network allowlist: the committed `config/sbx-network-allow.txt` includes Ollama Cloud and TypeSafe System One (`api.typesafe.ai:443`). If you use another model or provider API, add its domains narrowly (for example `api.example.com:443`) and run `make setup-sandbox-policy` before launching the sandbox.
 
 Recommended host PATH on Debian-style systems:
 
