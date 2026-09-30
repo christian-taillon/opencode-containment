@@ -1122,7 +1122,7 @@ web_container_bind_mode() {
     local bindings binding has_binding=0 has_network_accessible_binding=0
 
     if ! bindings="$(docker container inspect \
-        --format "{{range (index .NetworkSettings.Ports \"$WEB_PORT/tcp\")}}{{println .HostIP}}{{end}}" \
+        --format "{{range (index .NetworkSettings.Ports \"$WEB_PORT/tcp\")}}{{println .HostIp}}{{end}}" \
         "$WEB_INSPECTED_CONTAINER_ID" 2>&1)"; then
         echo "Error: Could not inspect web server port bindings for '$WEB_INSPECTED_CONTAINER_ID': $bindings" >&2
         return 1
