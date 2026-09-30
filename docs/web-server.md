@@ -55,7 +55,6 @@ ExecStart=/usr/bin/podman run --replace \
   --env XDG_DATA_HOME=/home/opencode/.local/share \
   --env XDG_CACHE_HOME=/home/opencode/.cache \
   --env XDG_STATE_HOME=/home/opencode/.local/state \
-  --env OPENCODE_SERVER_PASSWORD=changeme \
   --env-file %h/.config/opencode/opencode-web-container.env \
   -v %h/github:/workspace:rw,Z \
   -v %h/github/opencode-jev-compactor:%h/github/opencode-jev-compactor:ro,Z \
@@ -100,7 +99,7 @@ Notes:
   `opencode-container --sync-config`) once before enabling the service so
   auth and cache are seeded.
 - `OPENCODE_SERVER_PASSWORD` is required for network exposure. Set a strong
-  password. The username defaults to `opencode`; override with
+  password in the private environment file. The username defaults to `opencode`; override with
   `OPENCODE_SERVER_USERNAME` if needed.
 - The service is a **user** unit. Enable lingering (`loginctl enable-linger
   $USER`) if you want it to start at boot before you log in.
