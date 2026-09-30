@@ -517,6 +517,16 @@ mapfile -t docker_args < "$DOCKER_LOG"
 assert_command_tail opencode start
 
 reset_docker_artifacts
+JEV_PLUGIN_TEST_DIR="$TEST_HOME/github/opencode-jev-compactor"
+mkdir -p "$JEV_PLUGIN_TEST_DIR"
+TYPESAFE_API_KEY="typesafe-test-key" run_launcher auth ls > "$OUTPUT"
+mapfile -t docker_args < "$DOCKER_LOG"
+assert_arg_pair --env TYPESAFE_API_KEY=typesafe-test-key
+assert_arg_pair --volume "$JEV_PLUGIN_TEST_DIR:$JEV_PLUGIN_TEST_DIR:ro"
+assert_command_tail opencode auth ls
+rm -rf "$JEV_PLUGIN_TEST_DIR"
+
+reset_docker_artifacts
 run_launcher_with "$V2_CONTAINER_LAUNCHER" auth ls > "$OUTPUT"
 mapfile -t docker_args < "$DOCKER_LOG"
 assert_command_tail opencode auth ls
@@ -1062,8 +1072,17 @@ assert_event "network rm $DOCKER_NETWORK_ID"
 reset_sbx_artifacts
 run_launcher_with "$V2_SANDBOX_LAUNCHER" --workspace "$WORKSPACE" -- --continue > "$OUTPUT"
 assert_line "create --name opencode-workspace --memory 8g --cpus 4 --template localhost/opencode-containment:latest opencode $WORKSPACE" "$SBX_LOG"
-grep -Fq -- "exec -e OPENCODE_PROFILE=native" "$SBX_LOG" || fail "v2 sandbox must export the profile"
+grep -Fq -- "exec -e OPENCODE_PROFILE=native" "$SBX_LOG" || fail "compatibility sandbox alias must export the profile"
 grep -Fq -- "opencode --continue" "$SBX_LOG" || fail "compatibility sandbox alias must execute latest opencode"
+
+reset_sbx_artifacts
+JEV_PLUGIN_TEST_DIR="$TEST_DIR/jev-plugin"
+mkdir -p "$JEV_PLUGIN_TEST_DIR"
+OPENCODE_SANDBOX_NAME="opencode-jev-test" OPENCODE_JEV_PLUGIN_DIR="$JEV_PLUGIN_TEST_DIR" TYPESAFE_API_KEY="typesafe-test-key"   run_launcher_with "$V2_SANDBOX_LAUNCHER" --workspace "$WORKSPACE" -- --continue > "$OUTPUT"
+assert_line "create --name opencode-jev-test --memory 8g --cpus 4 --template localhost/opencode-containment:latest opencode $WORKSPACE $JEV_PLUGIN_TEST_DIR:ro" "$SBX_LOG"
+grep -Fq -- "-e TYPESAFE_API_KEY=typesafe-test-key" "$SBX_LOG" || fail "sandbox must pass the TypeSafe API key"
+grep -Fq -- "opencode --continue" "$SBX_LOG" || fail "sandbox Jev test must execute latest opencode"
+rm -rf "$JEV_PLUGIN_TEST_DIR"
 
 reset_docker_artifacts
 if DOCKER_NETWORK_SIGNAL=TERM run_launcher --web-server --web-port 4701 > "$OUTPUT" 2>&1; then
