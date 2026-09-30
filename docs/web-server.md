@@ -1,43 +1,20 @@
 # Web Server and Remote Attach
 
-The stable launcher's `--web-server` mode runs `opencode web` inside a detached
-container with persistent Basic Auth credentials. The side-by-side
-`opencode2-container --web-server` mode instead runs `opencode2 serve` and
-checks `/api/health`; it keeps the same containment, credential validation, and
-loopback/network opt-in protections. See the
-[README](../README.md#quick-start) for the built-in lifecycle commands
-(`start`, `stop`, `status`, `--web-port`, `--network-accessible`).
+The launcher runs the single OpenCode runtime supplied by the current
+`ghcr.io/anomalyco/opencode:latest` containment image. `--web-server` starts
+`opencode web` inside a detached container with persistent Basic Auth
+credentials and the same loopback/network opt-in protections documented in the
+[README](../README.md#quick-start).
 
-This doc covers two related patterns the launcher does not manage for you:
+Historical `opencode2-*` command names are compatibility aliases only. They do
+not start a second server implementation.
 
-1. Running the web server as a **systemd service** (auto-start, restart,
-   status) using a custom container image and port.
-2. **Attaching a TUI** to a running web server, including the path
-   translation you need when the server runs inside a container.
+This document covers two related patterns:
 
-## OpenCode 2 preview client
-
-The project install does not add a host `opencode2` command. For a server URL
-that is reachable from a container, use the contained preview client:
-
-```bash
-opencode2-container --server http://host.containers.internal:4096
-```
-
-The contained client cannot normally reach a loopback-only host listener at
-`127.0.0.1`; the example requires a server published on a container-reachable
-host address (Podman provides `host.containers.internal`; Docker may require
-its equivalent host-gateway address). For the default loopback server, install
-the separate beta host CLI and connect with `--server`:
-
-```bash
-opencode2 --server http://127.0.0.1:4096
-```
-
-The v2 server uses HTTP Basic Auth with username `opencode`; use the generated
-password from the credentials file reported by `opencode2-container`. The v2
-preview is beta-only, currently x86_64-musl and arm64-musl in this image, and
-v1 plugins do not work with it.
+1. Running the web server as a **systemd service** with a custom container
+   image and port.
+2. **Attaching a TUI** to a running web server, including container path
+   translation.
 
 ## systemd service
 
@@ -62,6 +39,7 @@ Type=simple
 WorkingDirectory=%h/github
 Environment=HOME=%h
 Environment=PATH=/usr/local/bin:/usr/bin:/bin
+EnvironmentFile=-%h/.config/opencode/opencode-web-container.env
 
 ExecStart=/usr/bin/podman run --replace \
   --name opencode-web-container \
@@ -79,7 +57,7 @@ ExecStart=/usr/bin/podman run --replace \
   --env XDG_DATA_HOME=/home/opencode/.local/share \
   --env XDG_CACHE_HOME=/home/opencode/.cache \
   --env XDG_STATE_HOME=/home/opencode/.local/state \
-  --env OPENCODE_SERVER_PASSWORD=changeme \
+  --env OPENCODE_SERVER_PASSWORD \
   -v %h/github:/workspace:rw,Z \
   -v %h/.config/opencode:/home/opencode/.config/opencode:ro,Z \
   -v %h/.local/share/opencode-container/local:/home/opencode/.local:rw,Z \
@@ -119,6 +97,18 @@ Notes:
 - `OPENCODE_SERVER_PASSWORD` is required for network exposure. Set a strong
   password. The username defaults to `opencode`; override with
   `OPENCODE_SERVER_USERNAME` if needed.
+- Keep service secrets in
+  `~/.config/opencode/opencode-web-container.env`, mode `0600`, rather than
+  embedding them in the unit. If a plugin needs `TYPESAFE_API_KEY`, add it to
+  that private environment file and add `--env TYPESAFE_API_KEY` to
+  `ExecStart`.
+- A local `file://` plugin must be mounted read-only at the exact path used in
+  OpenCode config. For example, if config points at
+  `file:///home/christian/github/opencode-jev-compactor`, add:
+  ```text
+  -v %h/github/opencode-jev-compactor:%h/github/opencode-jev-compactor:ro,Z
+  ```
+  Do not mount all of `$HOME` just to expose plugin source.
 - The service is a **user** unit. Enable lingering (`loginctl enable-linger
   $USER`) if you want it to start at boot before you log in.
 
