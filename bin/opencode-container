@@ -301,19 +301,15 @@ if [[ -f "$LOCAL_HOOK" ]]; then
     source "$LOCAL_HOOK"
 fi
 
-# The v2 wrappers select this mode with a private positional marker. Resolve it
-# after the local hook so an environment variable or local default cannot cause
-# a stable launcher to execute the preview binary (or vice versa).
-LAUNCHER_MODE="stable"
+# Legacy opencode2-* wrapper names remain as compatibility aliases, but every
+# launcher now executes the single OpenCode runtime supplied by
+# ghcr.io/anomalyco/opencode:latest.
+LAUNCHER_COMMAND="opencode-container"
 if [[ "${1:-}" == "--__opencode2" ]]; then
-    LAUNCHER_MODE="v2"
+    LAUNCHER_COMMAND="opencode2-container"
     shift
 fi
-if [[ "$LAUNCHER_MODE" == "v2" ]]; then
-    LAUNCHER_COMMAND="opencode2-container"
-else
-    LAUNCHER_COMMAND="opencode-container"
-fi
+LAUNCHER_MODE="stable"
 OPENCODE_EXECUTABLE="opencode"
 WEB_NAME_PREFIX="opencode-web-"
 WEB_HEALTH_PATH="/global/health"
