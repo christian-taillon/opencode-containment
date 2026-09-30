@@ -1,11 +1,11 @@
 # Web Server and Remote Attach
 
-The stable launcher's `--web-server` mode runs `opencode web` inside a detached
-container with persistent Basic Auth credentials. The side-by-side
-`opencode2-container --web-server` mode instead runs `opencode2 serve` and
-checks `/api/health`; it keeps the same containment, credential validation, and
-loopback/network opt-in protections. See the
-[README](../README.md#quick-start) for the built-in lifecycle commands
+The launcher's `--web-server` mode runs the latest `opencode web`
+inside a detached container with persistent Basic Auth credentials. Legacy
+`opencode2-container --web-server` commands are compatibility aliases to the
+same runtime, state, health endpoint, and credential behavior.
+
+See the [README](../README.md#quick-start) for the built-in lifecycle commands
 (`start`, `stop`, `status`, `--web-port`, `--network-accessible`).
 
 This doc covers two related patterns the launcher does not manage for you:
@@ -14,30 +14,6 @@ This doc covers two related patterns the launcher does not manage for you:
    status) using a custom container image and port.
 2. **Attaching a TUI** to a running web server, including the path
    translation you need when the server runs inside a container.
-
-## OpenCode 2 preview client
-
-The project install does not add a host `opencode2` command. For a server URL
-that is reachable from a container, use the contained preview client:
-
-```bash
-opencode2-container --server http://host.containers.internal:4096
-```
-
-The contained client cannot normally reach a loopback-only host listener at
-`127.0.0.1`; the example requires a server published on a container-reachable
-host address (Podman provides `host.containers.internal`; Docker may require
-its equivalent host-gateway address). For the default loopback server, install
-the separate beta host CLI and connect with `--server`:
-
-```bash
-opencode2 --server http://127.0.0.1:4096
-```
-
-The v2 server uses HTTP Basic Auth with username `opencode`; use the generated
-password from the credentials file reported by `opencode2-container`. The v2
-preview is beta-only, currently x86_64-musl and arm64-musl in this image, and
-v1 plugins do not work with it.
 
 ## systemd service
 
@@ -80,7 +56,9 @@ ExecStart=/usr/bin/podman run --replace \
   --env XDG_CACHE_HOME=/home/opencode/.cache \
   --env XDG_STATE_HOME=/home/opencode/.local/state \
   --env OPENCODE_SERVER_PASSWORD=changeme \
+  --env-file %h/.config/opencode/opencode-web-container.env \
   -v %h/github:/workspace:rw,Z \
+  -v %h/github/opencode-jev-compactor:%h/github/opencode-jev-compactor:ro,Z \
   -v %h/.config/opencode:/home/opencode/.config/opencode:ro,Z \
   -v %h/.local/share/opencode-container/local:/home/opencode/.local:rw,Z \
   -v %h/.local/share/opencode-container/cache:/home/opencode/.cache:rw,Z \
@@ -110,7 +88,12 @@ Notes:
 - `:Z` relabeling is required on SELinux-Enforcing hosts. Omit it on
   non-SELinux systems if you hit label errors.
 - The host OpenCode config directory is mounted read-only so the container
-  sees the same `opencode.json`, agents, skills, and commands as the host.
+  sees the same `opencode.json`, agents, skills, commands, and plugin declarations.
+- The Jev compactor checkout is mounted read-only at the same absolute path as
+  the host so a `file://%h/github/opencode-jev-compactor/src/index.ts` plugin
+  declaration resolves inside the container.
+- Put `TYPESAFE_API_KEY=...` in the private
+  `~/.config/opencode/opencode-web-container.env` file when using Jev.
 - Container state (`~/.local`, `~/.cache`) is isolated under
   `~/.local/share/opencode-container/` so container sessions do not collide
   with host OpenCode sessions. Run `make sync-config` (or
