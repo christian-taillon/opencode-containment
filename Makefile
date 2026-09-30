@@ -51,6 +51,7 @@ doctor: ## Check prerequisites
 	@echo "Checking prerequisites..."
 	@command -v docker >/dev/null 2>&1 && echo "✅ Docker is installed" || echo "❌ Docker is not installed"
 	@docker image inspect $(IMAGE_NAME) >/dev/null 2>&1 && echo "✅ Image $(IMAGE_NAME) is built" || echo "❌ Image $(IMAGE_NAME) is not built"
+	@if docker image inspect $(IMAGE_NAME) >/dev/null 2>&1; then version="$(docker run --rm --entrypoint opencode $(IMAGE_NAME) --version 2>/dev/null || true)"; [ -n "$version" ] && echo "✅ OpenCode image runtime: $version" || echo "⚠️ Could not read OpenCode version from image"; fi
 	@[ -n "$$SSH_AUTH_SOCK" ] && [ -S "$$SSH_AUTH_SOCK" ] && echo "✅ SSH agent is running" || echo "⚠️ SSH agent is not running or socket not found"
 	@[ -d "$(OPENCODE_CONTAINER_HOME)" ] && echo "✅ Persistent directory exists" || echo "❌ Persistent directory does not exist"
 	@jev="$${OPENCODE_JEV_PLUGIN_DIR-$$HOME/github/opencode-jev-compactor}"; \
