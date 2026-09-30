@@ -5,3 +5,6 @@
 # Ollama Cloud provider
 ollama.com:443
 *.ollama.com:443
+
+# TypeSafe System One for Jev compaction
+api.typesafe.ai:443
