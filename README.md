@@ -484,7 +484,7 @@ SECURITY_REPORT.md         security threat model and mitigations
 - **Image is stale or tools are outdated**: Run `make update` to pull the latest base image and rebuild without cache.
 - **Plugins or model state not showing up**: Run `make sync-config` to force-refresh host OpenCode cache/state into container persistent state.
 - **Plugin failed to load / missing module**: For a local `file://` checkout outside the active workspace, add its absolute directory to `OPENCODE_PLUGIN_PATHS` in `opencode-local.sh`. The launcher mounts that exact path read-only. See the "OpenCode Plugins" section.
-- **Plugin loads on the host but not in the container**: Its `node_modules` may contain glibc-linked native modules from the host. Rebuild the plugin's dependencies for Alpine/musl, or install the published npm package instead of a local `file://` path.not**: The OpenCode 2 preview does not support v1 plugins. The plugin needs a v2-compatible entrypoint.
+- **Plugin loads on the host but not in the container**: Its `node_modules` may contain glibc-linked native modules from the host. Rebuild the plugin dependencies for Alpine/musl, or install a published package instead of a local `file://` path.
 - **Docker/image/auth setup issues**: Run `make doctor` to check prerequisites, image, SSH agent, and OpenCode host state.
 - **Sandbox won't start**: Run `make doctor-sandbox` to check `sbx`, daemon status, KVM access, and filesystem tools. Confirm `/dev/kvm` is accessible and both `mkfs.ext4` and `mkfs.erofs` resolve in your PATH.
 - **Sandbox network blocked**: Add your provider's domain to `config/sbx-network-allow.txt` and run `make setup-sandbox-policy`.
