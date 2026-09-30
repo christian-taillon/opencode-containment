@@ -33,8 +33,7 @@ Next steps:
   1) Start the container: make run
   2) Optional secure mode: make run-secure
   3) Optional sandbox backend: make run-sandbox
-  4) OpenCode 2 preview: make run-opencode2 (or use opencode2-container)
-     v2 sandbox: make run-opencode2-sandbox (or use opencode2-sandbox)
+  4) Legacy opencode2-* command names remain compatibility aliases to the same latest OpenCode runtime
   5) Optional: copy opencode-local.example.sh to opencode-local.sh and customize
      - proxy / custom CA passthrough
      - local extra Alpine packages for builds
