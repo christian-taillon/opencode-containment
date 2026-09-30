@@ -34,7 +34,8 @@ Next steps:
   2) Optional secure mode: make run-secure
   3) Optional sandbox backend: make run-sandbox
   4) Legacy opencode2-* command names remain compatibility aliases to the same latest OpenCode runtime
-  5) Optional: copy opencode-local.example.sh to opencode-local.sh and customize
+  5) Optional Jev compaction plugin: make setup-jev
+  6) Optional: copy opencode-local.example.sh to opencode-local.sh and customize
      - proxy / custom CA passthrough
      - local extra Alpine packages for builds
   6) Optional CLI install: make shell-install
