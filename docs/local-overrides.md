@@ -35,23 +35,54 @@ workspace checks.
 
 ## Local plugin development mounts
 
-A `file://` plugin entry that points at a host checkout outside the workspace
-does not load inside the container: the launcher never mounts `$HOME`, and the
-`plugin-meta.json` path rewriting covers only the four OpenCode XDG
-directories. To use such a plugin with the container backend, mount its checkout
-read-only at the exact absolute path used in the plugin URL:
+The container and sandbox launchers have first-class support for the trusted
+Jev compaction checkout.
 
-```bash
-# The destination must equal the host path in the plugin's file:// URL.
-DOCKER_ARGS+=(--volume "$HOME/github/opencode-quota:$HOME/github/opencode-quota:ro,Z")
+By default, when this directory exists:
+
+```text
+$HOME/github/opencode-jev-compactor
 ```
 
-Mount the whole repository, not just `dist/`, so the plugin's bundled
-`node_modules` resolve. Keep the mount read-only and review the code you mount:
-plugins run inside the OpenCode process with access to the workspace and
-mirrored provider auth. Host-built native modules may need a musl-compatible
-rebuild for the Alpine image. These mounts do not apply to the sandbox backend,
-which ignores `DOCKER_ARGS`.
+the launcher exposes it read-only at the same absolute path inside the runtime.
+That allows a shared OpenCode config entry such as:
 
-The sandbox backend honors `XDG_CONFIG_HOME` and `XDG_DATA_HOME` for its
-read-only config and auth mirror. It does not share host cache or runtime state.
+```jsonc
+"plugin": [
+  [
+    "file:///home/christian/github/opencode-jev-compactor/src/index.ts",
+    { "delivery": "observe" }
+  ]
+]
+```
+
+Override the checkout path:
+
+```bash
+export OPENCODE_JEV_PLUGIN_DIR="$HOME/src/opencode-jev-compactor"
+```
+
+or disable the automatic mount:
+
+```bash
+export OPENCODE_JEV_PLUGIN_DIR=
+```
+
+When `TYPESAFE_API_KEY` is set in the launching shell, both backends pass it
+to OpenCode. For Docker Sandboxes, `api.typesafe.ai:443` is included in the
+project network allowlist.
+
+For other local plugins, the container backend can use an explicit narrow
+read-only mount:
+
+```bash
+DOCKER_ARGS+=(--volume "$HOME/github/my-plugin:$HOME/github/my-plugin:ro,Z")
+```
+
+The destination must exactly match the path in the plugin's `file://` URL.
+Mount only plugin code you trust. Plugins execute inside the OpenCode process
+with access to the workspace and mirrored provider authentication.
+
+The sandbox backend ignores `DOCKER_ARGS`; only the dedicated Jev checkout
+is exposed automatically as an extra read-only workspace. Other local plugin
+checkouts require an explicit sandbox integration or a custom template.
