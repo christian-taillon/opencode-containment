@@ -61,7 +61,8 @@ systemctl --user restart opencode-web-container.service
 | Host path | Container path | Mode | Purpose |
 |-----------|---------------|------|---------|
 | `~/github` | `/workspace` | RW, `:Z` | Project workspace |
-| `~/.config/opencode` | `/home/opencode/.config/opencode` | RO, `:Z` | Shared config (opencode.json, agents, skills, commands) |
+| `~/.config/opencode` | `/home/opencode/.config/opencode` | RO, `:Z` | Shared config (opencode.json, agents, skills, commands, plugin declarations) |
+| `~/github/opencode-jev-compactor` | same absolute path | RO, `:Z` | Trusted local Jev compaction plugin checkout |
 | `~/.local/share/opencode-container/local` | `/home/opencode/.local` | RW, `:Z` | Isolated container state (auth, data, sessions) |
 | `~/.local/share/opencode-container/cache` | `/home/opencode/.cache` | RW, `:Z` | Isolated container cache |
 | `~/.gitconfig` | `/home/opencode/.gitconfig` | RO, `:Z` | Git config |
@@ -70,7 +71,7 @@ systemctl --user restart opencode-web-container.service
 
 All mounts use `:Z` for SELinux relabeling (host is SELinux Enforcing).
 
-**Not mounted**: private SSH keys, `.env` files, Docker socket, `/`, `$HOME`.
+**Not mounted**: private SSH keys, arbitrary project `.env` files, Docker socket, `/`, or `$HOME`. The Jev checkout is the one intentional sibling-repository plugin mount and remains read-only.
 
 Foreground launcher invocations may additionally use repeatable
 `--with-tool COMMAND_OR_PATH`. Each selected executable is snapshotted into a
@@ -100,6 +101,12 @@ Loaded from `~/.config/opencode/opencode-web-container.env`:
 ```
 OPENCODE_SERVER_PASSWORD=<set in your private env file; do not commit>
 OPENCODE_ENABLE_EXA=true
+```
+
+The private env file may also contain:
+
+```text
+TYPESAFE_API_KEY=<TypeSafe System One key>
 ```
 
 Additional env vars set inline in the service file:
