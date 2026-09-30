@@ -46,13 +46,7 @@ This project ships two backends rather than forcing one choice:
 
 Both backends share the same workspace guardrails (blocks `/`, `$HOME`, and out-of-tree mounts) and the same profile model (`secure` / `native`). Use `make run` for daily work; use `make run-sandbox` when you want stronger isolation or are running untrusted agent code.
 
-The side-by-side OpenCode 2 preview is available through
-`opencode2-container`, `opencode2-sandbox`, and the `opencode2-containment`
-alias. It uses the same containment controls and host XDG source handling,
-but has separate default runtime state directories so stable and preview
-sessions do not share a database. The image currently includes only the
-pinned x86_64-musl or arm64-musl beta binary; v1 plugins are not compatible
-with the v2 preview, and its CLI/server interface may change upstream.
+The image contains one OpenCode runtime supplied by `ghcr.io/anomalyco/opencode:latest`. Historical `opencode2-*` command names are compatibility aliases to that same runtime and do not create a second trust boundary or version track.
 
 ## Security Controls
 
@@ -99,10 +93,10 @@ with the v2 preview, and its CLI/server interface may change upstream.
 | Direct host SSH key exposure | Mitigated | Uses forwarded SSH agent instead of mounting private keys. |
 | Privilege escalation inside container | Mitigated | Drops capabilities and blocks privilege escalation. |
 | Zombie processes and signal handling | Mitigated | `--init` runs an init process (tini) inside the container. |
-| Broad env leakage | Partially mitigated | Only selected variables are passed through (`GITHUB_TOKEN`, `GH_TOKEN`, proxy vars, `NODE_EXTRA_CA_CERTS`). |
+| Broad env leakage | Partially mitigated | Only selected variables are passed through (`GITHUB_TOKEN`, `GH_TOKEN`, proxy vars, `NODE_EXTRA_CA_CERTS`, and `TYPESAFE_API_KEY` when explicitly set). |
 | Host state separation | Partially mitigated | Container state/cache is kept under a dedicated host directory. |
 | Stronger runtime isolation (sandbox backend) | Mitigated | Docker Sandboxes runs the agent inside a microVM, providing kernel-level separation beyond what a container can offer. |
-| Untrusted plugin code from arbitrary host paths | Mitigated by default | Plugin declarations are visible via the read-only config mount, but `file://` plugin paths outside the workspace do not exist inside the container. Local plugin development requires an explicit, narrow, read-only `DOCKER_ARGS` mount chosen by the user. |
+| Untrusted plugin code from arbitrary host paths | Mitigated by default | Local `file://` plugin paths are unavailable unless the user explicitly lists reviewed absolute directories in `OPENCODE_PLUGIN_PATHS`; the launchers reject `/` and the entire home directory and expose listed checkouts read-only. |
 
 ## Known Accepted Risks
 
@@ -120,7 +114,7 @@ with the v2 preview, and its CLI/server interface may change upstream.
 | Sandbox backend provides stronger isolation | Accepted | Available via `make run-sandbox`; adds microVM boundary for agents that need it. |
 | Resource limits (container backend) | Accepted | The container backend does not set explicit memory, CPU, or PID limits (the sandbox backend does via `sbx --memory` and `--cpus`). This avoids over-constraining diverse workloads. Add limits in `opencode-local.sh` via `DOCKER_ARGS+=(--memory 4g --cpus 2 --pids-limit 512)` if needed. |
 | XDG state seeding from host | Accepted | Host OpenCode auth (`auth.json`, `account.json`, `mcp-auth.json`) is copied into container state each launch. `opencode.db` is seeded only on first init to preserve container-created sessions. Cache and state files (plugins, `models.json`, `plugin-meta.json`) are seeded first-init. `plugin-meta.json` host paths are rewritten to container home paths. This is accepted to keep the native workflow smooth without re-login. |
-| Trusted plugin code execution | Accepted with explicit opt-in | Plugins run inside the OpenCode process in the container, with the mounted workspace and mirrored provider auth available. Published npm plugins install into the container's own package cache; a local `file://` plugin requires the user to add a narrow read-only mount of that checkout in `opencode-local.sh`. The host `$HOME` is never mounted wholesale. This is the same trust model as choosing which repositories to open in the container, but users should understand a plugin is executable code with agent-session privileges. |
+| Trusted plugin code execution | Accepted with explicit opt-in | Plugins run inside the OpenCode process with the mounted workspace and available provider auth. Local `file://` plugins require explicit `OPENCODE_PLUGIN_PATHS`; each checkout is exposed read-only at the same absolute path. The host `$HOME` is never mounted wholesale. Users should treat plugins as executable code with agent-session privileges. |
 
 ## Not Fully Solved
 
