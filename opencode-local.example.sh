@@ -5,7 +5,7 @@
 # This file is gitignored - personal settings stay local.
 #
 # This script is sourced by bin/opencode-container and bin/opencode-sandbox.
-# The opencode2-* wrappers use the same hook and settings.
+# Legacy opencode2-* wrappers are aliases to the same latest OpenCode runtime.
 # You can set environment variables, modify DOCKER_ARGS for the container backend,
 # or set OPENCODE_CONFIG_CONTENT.
 #
@@ -19,7 +19,6 @@
 # --- Profile & Image Defaults ---
 # export OPENCODE_PROFILE="native"
 # export OPENCODE_IMAGE="opencode-containment:latest"
-# export OPENCODE2_CONTAINER_HOME="$HOME/.local/share/opencode2-container"
 
 # --- Optional Local Web Server ---
 # `opencode-container --web-server start` publishes this port to 127.0.0.1 by
@@ -53,11 +52,6 @@
 # export MARKSMAN_VERSION="2026-02-08"
 # export MARKSMAN_SHA256_X86_64="<linux-musl-x64-sha256>"
 # export MARKSMAN_SHA256_AARCH64="<linux-musl-arm64-sha256>"
-# export OPENCODE2_VERSION="0.0.0-beta-18743"
-# Legacy x86_64 fallback (prefer the platform-specific values below).
-# export OPENCODE2_TARBALL_SHA512="<sha512-for-the-selected-x86_64-tarball>"
-# export OPENCODE2_TARBALL_SHA512_X86_64="<sha512-for-the-selected-x86_64-tarball>"
-# export OPENCODE2_TARBALL_SHA512_AARCH64="<sha512-for-the-selected-arm64-tarball>"
 
 # --- OpenCode Config Override (JSON) ---
 # Set this to pass custom config into the container:
@@ -82,6 +76,13 @@
 # Resource limits (container backend only; sandbox uses sbx --memory/--cpus).
 # DOCKER_ARGS+=(--memory 4g --cpus 2 --pids-limit 512)
 
+# --- Jev / TypeSafe ---
+# The launchers automatically pass TYPESAFE_API_KEY when it is set.
+# The trusted Jev plugin checkout is also mounted read-only at the same absolute
+# path by default when $HOME/github/opencode-jev-compactor exists.
+# Set an alternate path, or set an empty string to disable the automatic mount.
+# export OPENCODE_JEV_PLUGIN_DIR="$HOME/github/opencode-jev-compactor"
+#
 # --- Credential Passthrough ---
 # Example: pass through personal credentials only when you choose.
 # [[ -n "${EXAMPLE_API_KEY:-}" ]] && DOCKER_ARGS+=(--env "EXAMPLE_API_KEY=$EXAMPLE_API_KEY")
@@ -117,5 +118,3 @@
 
 # Sandbox-only support files, including the read-only auth mirror:
 # export OPENCODE_SANDBOX_STATE_DIR="${XDG_DATA_HOME:-$HOME/.local/share}/opencode-sandbox"
-# export OPENCODE2_SANDBOX_TEMPLATE="localhost/opencode-containment:latest"
-# export OPENCODE2_SANDBOX_STATE_DIR="${XDG_DATA_HOME:-$HOME/.local/share}/opencode2-sandbox"
