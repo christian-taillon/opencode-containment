@@ -35,10 +35,10 @@ run-native: ## Run with native profile
 run-sandbox: ## Run the sandbox backend with Docker Sandboxes
 	@bash bin/opencode-sandbox --profile native
 
-run-opencode2: ## Run the OpenCode 2.0 preview container backend
+run-opencode2: ## Deprecated compatibility alias for the latest OpenCode container
 	@bash bin/opencode2-container --profile native
 
-run-opencode2-sandbox: ## Run the OpenCode 2.0 preview sandbox backend
+run-opencode2-sandbox: ## Deprecated compatibility alias for the latest OpenCode sandbox
 	@bash bin/opencode2-sandbox --profile native
 
 sync-config: ## Force-refresh OpenCode cache/state from host into container persistent state
@@ -51,6 +51,9 @@ doctor: ## Check prerequisites
 	@echo "Checking prerequisites..."
 	@command -v docker >/dev/null 2>&1 && echo "✅ Docker is installed" || echo "❌ Docker is not installed"
 	@docker image inspect $(IMAGE_NAME) >/dev/null 2>&1 && echo "✅ Image $(IMAGE_NAME) is built" || echo "❌ Image $(IMAGE_NAME) is not built"
+	@if docker image inspect $(IMAGE_NAME) >/dev/null 2>&1; then version="$(docker run --rm --entrypoint opencode $(IMAGE_NAME) --version 2>/dev/null || true)"; [ -n "$version" ] && echo "✅ OpenCode image runtime: $version" || echo "❌ OpenCode binary did not report a version"; fi
+	@if [ -n "${OPENCODE_LOCAL_PLUGIN_DIRS:-}" ]; then oldifs="$IFS"; IFS=:; for path in $OPENCODE_LOCAL_PLUGIN_DIRS; do [ -d "$path" ] && echo "✅ local plugin: $path" || echo "❌ local plugin missing: $path"; done; IFS="$oldifs"; else echo "ℹ️  no OPENCODE_LOCAL_PLUGIN_DIRS configured"; fi
+	@[ -n "${TYPESAFE_API_KEY:-}" ] && echo "✅ TYPESAFE_API_KEY is set for optional Jev plugins" || echo "ℹ️  TYPESAFE_API_KEY is not set"
 	@[ -n "$$SSH_AUTH_SOCK" ] && [ -S "$$SSH_AUTH_SOCK" ] && echo "✅ SSH agent is running" || echo "⚠️ SSH agent is not running or socket not found"
 	@[ -d "$(OPENCODE_CONTAINER_HOME)" ] && echo "✅ Persistent directory exists" || echo "❌ Persistent directory does not exist"
 	@config="$${OPENCODE_CONFIG_DIR:-$${XDG_CONFIG_HOME:-$$HOME/.config}/opencode}"; \
