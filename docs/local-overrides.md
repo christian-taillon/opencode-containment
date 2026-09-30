@@ -35,23 +35,34 @@ workspace checks.
 
 ## Local plugin development mounts
 
-A `file://` plugin entry that points at a host checkout outside the workspace
-does not load inside the container: the launcher never mounts `$HOME`, and the
-`plugin-meta.json` path rewriting covers only the four OpenCode XDG
-directories. To use such a plugin with the container backend, mount its checkout
-read-only at the exact absolute path used in the plugin URL:
+Use `OPENCODE_PLUGIN_PATHS` for trusted local `file://` plugin checkouts outside the active workspace:
 
 ```bash
-# The destination must equal the host path in the plugin's file:// URL.
-DOCKER_ARGS+=(--volume "$HOME/github/opencode-quota:$HOME/github/opencode-quota:ro,Z")
+export OPENCODE_PLUGIN_PATHS="$HOME/github/opencode-jev-compactor"
 ```
 
-Mount the whole repository, not just `dist/`, so the plugin's bundled
-`node_modules` resolve. Keep the mount read-only and review the code you mount:
-plugins run inside the OpenCode process with access to the workspace and
-mirrored provider auth. Host-built native modules may need a musl-compatible
-rebuild for the Alpine image. These mounts do not apply to the sandbox backend,
-which ignores `DOCKER_ARGS`.
+The value is colon-separated when more than one checkout is needed. Each entry must be an absolute directory. The launchers reject `/` and the entire home directory.
 
-The sandbox backend honors `XDG_CONFIG_HOME` and `XDG_DATA_HOME` for its
-read-only config and auth mirror. It does not share host cache or runtime state.
+The container backend mounts each checkout read-only at the same absolute path, which keeps host OpenCode configuration such as:
+
+```jsonc
+"plugin": [
+  "file:///home/christian/github/opencode-jev-compactor"
+]
+```
+
+valid inside the container.
+
+The sandbox backend exposes the same paths as read-only extra workspaces when the sandbox is created. Existing named sandboxes must be recreated after changing `OPENCODE_PLUGIN_PATHS` because sandbox workspace mounts are established at creation time.
+
+Mount the whole plugin repository so its package files and dependencies resolve. Only expose plugins you trust and review: they execute inside the OpenCode process with access to the mounted workspace and available provider credentials.
+
+For TypeSafe-backed plugins, pass the key explicitly:
+
+```bash
+export TYPESAFE_API_KEY="..."
+```
+
+The container and sandbox launchers forward `TYPESAFE_API_KEY` only when it is set. Keep secrets in the gitignored `opencode-local.sh`, shell environment, or a private service environment file. Do not commit them.
+
+The sandbox backend honors `XDG_CONFIG_HOME` and `XDG_DATA_HOME` for its read-only config and auth mirror. It does not share host cache or runtime state.
