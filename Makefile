@@ -35,10 +35,10 @@ run-native: ## Run with native profile
 run-sandbox: ## Run the sandbox backend with Docker Sandboxes
 	@bash bin/opencode-sandbox --profile native
 
-run-opencode2: ## Run the OpenCode 2.0 preview container backend
+run-opencode2: ## Compatibility alias for the OpenCode latest container backend
 	@bash bin/opencode2-container --profile native
 
-run-opencode2-sandbox: ## Run the OpenCode 2.0 preview sandbox backend
+run-opencode2-sandbox: ## Compatibility alias for the OpenCode latest sandbox backend
 	@bash bin/opencode2-sandbox --profile native
 
 sync-config: ## Force-refresh OpenCode cache/state from host into container persistent state
