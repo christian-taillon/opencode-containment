@@ -199,7 +199,36 @@ if [[ -n "$OPENCODE_LOCAL_PLUGIN_DIRS" ]]; then
     IFS=':' read -r -a requested_plugins <<< "$OPENCODE_LOCAL_PLUGIN_DIRS"
     for plugin_path in "${requested_plugins[@]}"; do
         [[ -n "$plugin_path" ]] || continue
-        if [[ "$plugin_path" == *
+        if [[ "$plugin_path" =~ [[:cntrl:]] ]]; then
+            echo "Error: Invalid local OpenCode plugin directory: $plugin_path" >&2
+            exit 1
+        fi
+        if [[ ! -d "$plugin_path" ]]; then
+            echo "Error: Invalid local OpenCode plugin directory: $plugin_path" >&2
+            exit 1
+        fi
+        resolved_plugin="$(resolve_path "$plugin_path")" || {
+            echo "Error: Could not resolve local OpenCode plugin directory: $plugin_path" >&2
+            exit 1
+        }
+        if [[ "$resolved_plugin" == "/" || "$resolved_plugin" == "$REAL_HOME" ]]; then
+            echo "Error: Refusing broad local plugin mount: $resolved_plugin" >&2
+            exit 1
+        fi
+        duplicate=0
+        for existing_plugin in "${LOCAL_PLUGIN_PATHS[@]}"; do
+            if [[ "$existing_plugin" == "$resolved_plugin" ]]; then
+                duplicate=1
+                break
+            fi
+        done
+        [[ "$duplicate" == "0" ]] || continue
+        LOCAL_PLUGIN_PATHS+=("$resolved_plugin")
+        EXTRA_WORKSPACES+=("$resolved_plugin:ro")
+    done
+fi
+
+if [[ -d "$OPENCODE_CONFIG_DIR" ]]; then
     REAL_OPENCODE_CONFIG_DIR="$(resolve_path "$OPENCODE_CONFIG_DIR")"
     EXTRA_WORKSPACES+=("$REAL_OPENCODE_CONFIG_DIR:ro")
 else
