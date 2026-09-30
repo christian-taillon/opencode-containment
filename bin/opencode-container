@@ -390,9 +390,9 @@ Behavior:
   --web-server starts the server by default; its commands are start, stop, and status.
   --web-server cannot be combined with --with-tool, OpenCode, or raw command arguments.
 
-Variant:
-  This launcher uses '$OPENCODE_EXECUTABLE'. The opencode2 launcher is a beta
-  preview and uses 'serve' plus /api/health for web-server mode.
+Runtime:
+  This launcher uses '$OPENCODE_EXECUTABLE' from the latest OpenCode image.
+  Legacy opencode2-* names are compatibility aliases to this same runtime.
 
 Profiles:
   secure: Essential mounts only (opencode config, git config, workspace, persistent cache/state, SSH agent)
@@ -745,14 +745,9 @@ read_web_credentials() {
         echo "Error: Web server credentials file must have mode 0600: $WEB_CREDENTIALS_FILE" >&2
         return 1
     fi
-    # The fixed format is variant-specific, including both required trailing
-    # newlines. v2's server uses the fixed Basic Auth username `opencode`.
+    # The fixed format includes both required trailing newlines.
     size="$(stat_file_size "$WEB_CREDENTIALS_FILE")" || return 1
-    if [[ "$LAUNCHER_MODE" == "v2" ]]; then
-        expected_size=124
-    else
-        expected_size=141
-    fi
+    expected_size=141
     if [[ "$size" != "$expected_size" ]]; then
         echo "Error: Web server credentials file is malformed: $WEB_CREDENTIALS_FILE" >&2
         return 1
@@ -772,12 +767,7 @@ read_web_credentials() {
     fi
     exec 3<&-
 
-    if [[ "$LAUNCHER_MODE" == "v2" ]]; then
-        if [[ "$username_line" != "OPENCODE_SERVER_USERNAME=opencode" ]]; then
-            echo "Error: Web server credentials file is malformed: $WEB_CREDENTIALS_FILE" >&2
-            return 1
-        fi
-    elif ! [[ "$username_line" =~ ^OPENCODE_SERVER_USERNAME=(opencode-[0-9a-f]{16})$ ]]; then
+    if ! [[ "$username_line" =~ ^OPENCODE_SERVER_USERNAME=(opencode-[0-9a-f]{16})$ ]]; then
         echo "Error: Web server credentials file is malformed: $WEB_CREDENTIALS_FILE" >&2
         return 1
     fi
@@ -821,11 +811,7 @@ create_web_credentials() {
         return
     fi
 
-    if [[ "$LAUNCHER_MODE" == "v2" ]]; then
-        username="opencode"
-    else
-        username="opencode-$(od -An -N 8 -tx1 /dev/urandom | tr -d ' \n')"
-    fi
+    username="opencode-$(od -An -N 8 -tx1 /dev/urandom | tr -d ' \n')"
     password="$(od -An -N 32 -tx1 /dev/urandom | tr -d ' \n')"
     if ! [[ "$username" == "opencode" || "$username" =~ ^opencode-[0-9a-f]{16}$ ]] \
         || ! [[ "$password" =~ ^[0-9a-f]{64}$ ]]; then
@@ -1530,7 +1516,7 @@ if [[ "$WEB_SERVER" == "1" ]]; then
         --publish "${WEB_BIND_ADDRESS}:${WEB_PORT}:${WEB_PORT}"
         --volume "$WEB_CREDENTIALS_FILE:/tmp/opencode-web-credentials:$RO_MOUNT_OPTS"
         --volume "$WEB_ENTRYPOINT:/tmp/opencode-web-entrypoint:$RO_MOUNT_OPTS"
-        --env "OPENCODE_WEB_VARIANT=$LAUNCHER_MODE"
+        --env "OPENCODE_WEB_VARIANT=stable"
         --network "$WEB_NETWORK_NAME"
         # Override the image entrypoint so custom or stale images cannot skip
         # credential loading; /bin/sh executes the mounted wrapper below.
