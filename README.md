@@ -365,7 +365,7 @@ Example OpenCode configuration:
 {
   "plugin": [
     [
-      "file:///home/christian/github/opencode-jev-compactor/src/index.ts",
+      "file:///home/christian/github/opencode-jev-compactor/dist/index.js",
       {
         "enabled": true,
         "delivery": "observe"
