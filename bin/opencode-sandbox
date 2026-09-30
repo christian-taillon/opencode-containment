@@ -238,6 +238,12 @@ if [ -n "${OPENCODE_HOST_CONFIG:-}" ]; then
     fi
 fi
 
+if [ -n "${OPENCODE_JEV_PLUGIN_PATH:-}" ]; then
+    if [ ! -d "$OPENCODE_JEV_PLUGIN_PATH" ]; then
+        echo "Warning: Jev plugin checkout is not mounted in sandbox; recreate $SANDBOX_NAME to enable it." >&2
+    fi
+fi
+
 if [ "${OPENCODE_AUTH_SYNC:-1}" = "0" ]; then
     if [ -L "$HOME/.local/share/opencode/auth.json" ]; then
         rm -f "$HOME/.local/share/opencode/auth.json"
@@ -258,6 +264,7 @@ fi'
     -e "OPENCODE_HOST_CONFIG=$REAL_OPENCODE_CONFIG_DIR" \
     -e "OPENCODE_AUTH_SYNC=$OPENCODE_SYNC_HOST_AUTH" \
     -e "OPENCODE_AUTH_MIRROR=${REAL_AUTH_MIRROR_DIR:+$REAL_AUTH_MIRROR_DIR/auth.json}" \
+    -e "OPENCODE_JEV_PLUGIN_PATH=$REAL_JEV_PLUGIN_DIR" \
     "$SANDBOX_NAME" sh -lc "$BOOTSTRAP_SCRIPT"
 
 EXEC_ARGS=(
