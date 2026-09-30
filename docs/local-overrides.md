@@ -6,19 +6,18 @@ container-owned persistent paths.
 
 ## OpenCode XDG sources
 
-The container launcher resolves these host OpenCode directories:
+The launchers resolve these host OpenCode directories:
 
 - config: `OPENCODE_CONFIG_DIR` or `${XDG_CONFIG_HOME:-$HOME/.config}/opencode`
 - data: `OPENCODE_HOST_STATE_DIR` (legacy name) or `${XDG_DATA_HOME:-$HOME/.local/share}/opencode`
 - cache: `OPENCODE_HOST_CACHE_DIR` or `${XDG_CACHE_HOME:-$HOME/.cache}/opencode`
 - runtime state: `OPENCODE_HOST_RUNTIME_STATE_DIR` or `${XDG_STATE_HOME:-$HOME/.local/state}/opencode`
 
-Config mounts read-only. Data, cache, and runtime state are copied into
-`OPENCODE_CONTAINER_HOME`, never mounted writable from the host. `auth.json`,
-`account.json`, and `mcp-auth.json` refresh each normal launch; the session
-database seeds only when absent.
-Cache (`packages/` can be large) and selected runtime-state files seed only on
-first init or an explicit refresh.
+The container backend mounts config read-only. Data, cache, and runtime state
+are copied into `OPENCODE_CONTAINER_HOME`, never mounted writable from the
+host. `auth.json`, `account.json`, and `mcp-auth.json` refresh each normal
+launch; the session database seeds only when absent. Cache and selected runtime
+state seed on first init or explicit refresh.
 
 ```bash
 export OPENCODE_CONFIG_DIR="$HOME/custom/opencode-config"
@@ -28,30 +27,92 @@ export OPENCODE_HOST_RUNTIME_STATE_DIR="$HOME/custom/opencode-state"
 ```
 
 Set `OPENCODE_SYNC_HOST_AUTH=0`, `OPENCODE_SYNC_CONFIG_CACHE=0`, or
-`OPENCODE_SYNC_CONFIG_STATE=0` to skip their respective copies. Run
-`make sync-config` (or `opencode-container --sync-config`) to force-refresh
-cache/state only; it never replaces `opencode.db` and exits before Docker or
-workspace checks.
+`OPENCODE_SYNC_CONFIG_STATE=0` to skip the corresponding copies. Run
+`make sync-config` or `opencode-container --sync-config` to force-refresh
+cache/state only; it never replaces `opencode.db`.
 
-## Local plugin development mounts
+The sandbox backend mounts host config read-only and mirrors host auth into a
+sandbox-specific read-only auth directory. It does not share host cache/runtime
+state.
 
-A `file://` plugin entry that points at a host checkout outside the workspace
-does not load inside the container: the launcher never mounts `$HOME`, and the
-`plugin-meta.json` path rewriting covers only the four OpenCode XDG
-directories. To use such a plugin with the container backend, mount its checkout
-read-only at the exact absolute path used in the plugin URL:
+## OpenCode runtime
 
-```bash
-# The destination must equal the host path in the plugin's file:// URL.
-DOCKER_ARGS+=(--volume "$HOME/github/opencode-quota:$HOME/github/opencode-quota:ro,Z")
+The project does not pin a second OpenCode CLI. The containment image follows:
+
+```text
+ghcr.io/anomalyco/opencode:latest
 ```
 
-Mount the whole repository, not just `dist/`, so the plugin's bundled
-`node_modules` resolve. Keep the mount read-only and review the code you mount:
-plugins run inside the OpenCode process with access to the workspace and
-mirrored provider auth. Host-built native modules may need a musl-compatible
-rebuild for the Alpine image. These mounts do not apply to the sandbox backend,
-which ignores `DOCKER_ARGS`.
+Run `make update` to pull the current base image and rebuild containment.
 
-The sandbox backend honors `XDG_CONFIG_HOME` and `XDG_DATA_HOME` for its
-read-only config and auth mirror. It does not share host cache or runtime state.
+The historical `opencode2-*` commands are compatibility aliases only. They
+invoke the same current `opencode` runtime.
+
+## Local plugin checkout mounts
+
+For a local `file://` plugin outside the active workspace, set
+`OPENCODE_LOCAL_PLUGIN_DIRS` to one or more trusted checkout directories:
+
+```bash
+export OPENCODE_LOCAL_PLUGIN_DIRS="$HOME/github/opencode-jev-compactor"
+```
+
+Multiple directories use a colon-separated list:
+
+```bash
+export OPENCODE_LOCAL_PLUGIN_DIRS="$HOME/github/plugin-a:$HOME/github/plugin-b"
+```
+
+Each checkout is canonicalized and mounted read-only at the same absolute path
+inside containment. This lets the same OpenCode config work on the host and in
+the contained runtime:
+
+```jsonc
+{
+  "plugin": [
+    [
+      "file:///home/christian/github/opencode-jev-compactor",
+      { "enabled": true, "delivery": "observe" }
+    ]
+  ]
+}
+```
+
+The launcher rejects a plugin directory that resolves to `/` or exactly
+`$HOME`. Duplicate paths are mounted once.
+
+Container backend: each checkout becomes a read-only bind mount.
+
+Sandbox backend: each checkout becomes a read-only extra workspace when the
+named sandbox is created. If you change `OPENCODE_LOCAL_PLUGIN_DIRS` after a
+sandbox already exists, remove/recreate that sandbox so the new mount set is
+present.
+
+Only mount plugin code you trust. Plugins execute inside the OpenCode process
+and can access the writable workspace and mirrored provider credentials.
+
+## Plugin secrets
+
+Selected plugin secrets are passed only when explicitly present in the
+launching environment. TypeSafe Jev uses:
+
+```bash
+export TYPESAFE_API_KEY='...'
+```
+
+The container and sandbox launchers pass `TYPESAFE_API_KEY` through without
+mounting a secret file. Do not commit the key to `opencode-local.sh`, OpenCode
+config, or this repository.
+
+## Docker-only local customization
+
+`DOCKER_ARGS` remains available for advanced container-backend overrides such
+as resource limits or a private provider config:
+
+```bash
+DOCKER_ARGS+=(--memory 4g --cpus 2 --pids-limit 512)
+```
+
+Docker-specific `DOCKER_ARGS` are ignored by the sandbox backend because
+`sbx` owns its runtime boundary. Prefer `OPENCODE_LOCAL_PLUGIN_DIRS` for
+plugins because it works across both backends.
