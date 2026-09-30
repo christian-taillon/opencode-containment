@@ -391,8 +391,8 @@ Behavior:
   --web-server cannot be combined with --with-tool, OpenCode, or raw command arguments.
 
 Runtime:
-  This launcher uses OpenCode from the configured image. The default image is
-  rebuilt from ghcr.io/anomalyco/opencode:latest.
+  This launcher uses the OpenCode binary from the configured image. The default
+  image is rebuilt from ghcr.io/anomalyco/opencode:latest.
 
 Profiles:
   secure: Essential mounts only (opencode config, git config, workspace, persistent cache/state, SSH agent)
@@ -1407,8 +1407,8 @@ if [[ -d "$HOST_CONFIG_DIR" ]]; then
     DOCKER_ARGS+=(--volume "$HOST_CONFIG_DIR:$CONTAINER_CONFIG_PATH:ro")
 fi
 
-# Explicit local plugin checkouts are mounted read-only at the same absolute
-# path so file:// plugin specs in the shared OpenCode config resolve unchanged.
+# Trusted local plugin checkouts are mounted read-only at the same absolute
+# path so file:// plugin specs in shared OpenCode config resolve unchanged.
 append_local_plugin_mounts || exit 1
 
 # Set XDG base dirs explicitly so OpenCode resolves config/data/cache/state
@@ -1620,7 +1620,8 @@ if [[ -f "$LOCAL_HOOK" ]]; then
     source "$LOCAL_HOOK"
 fi
 
-# # after the local hook so an environment variable or local default cannot cause
+# The v2 wrappers select this mode with a private positional marker. Resolve it
+# after the local hook so an environment variable or local default cannot cause
 # a stable launcher to execute the preview binary (or vice versa).
 LAUNCHER_MODE="stable"
 if [[ "${1:-}" == "--__opencode2" ]]; then
@@ -2969,7 +2970,8 @@ if [[ -f "$LOCAL_HOOK" ]]; then
     source "$LOCAL_HOOK"
 fi
 
-# # after the local hook so an environment variable or local default cannot cause
+# The v2 wrappers select this mode with a private positional marker. Resolve it
+# after the local hook so an environment variable or local default cannot cause
 # a stable launcher to execute the preview binary (or vice versa).
 LAUNCHER_MODE="stable"
 if [[ "${1:-}" == "--__opencode2" ]]; then
