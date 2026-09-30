@@ -52,7 +52,7 @@ doctor: ## Check prerequisites
 	@command -v docker >/dev/null 2>&1 && echo "✅ Docker is installed" || echo "❌ Docker is not installed"
 	@docker image inspect $(IMAGE_NAME) >/dev/null 2>&1 && echo "✅ Image $(IMAGE_NAME) is built" || echo "❌ Image $(IMAGE_NAME) is not built"
 	@docker image inspect $(IMAGE_NAME) >/dev/null 2>&1 && { version="$$(docker run --rm --entrypoint opencode $(IMAGE_NAME) --version 2>/dev/null || true)"; [ -n "$$version" ] && echo "✅ OpenCode runtime: $$version" || echo "❌ OpenCode runtime check failed"; } || true
-	@if [ -n "$${OPENCODE_PLUGIN_PATHS:-}" ]; then OLDIFS="$$IFS"; IFS=':'; for plugin in $$OPENCODE_PLUGIN_PATHS; do if [ -d "$$plugin" ]; then echo "✅ Local plugin: $$plugin"; else echo "❌ Local plugin missing: $$plugin"; fi; done; IFS="$$OLDIFS"; fi
+	@if [ -n "${OPENCODE_PLUGIN_PATHS:-}" ]; then printf '%s\n' "${OPENCODE_PLUGIN_PATHS}" | tr ':' '\n' | while IFS= read -r plugin; do [ -z "$plugin" ] && continue; if [ -d "$plugin" ]; then echo "✅ Local plugin: $plugin"; else echo "❌ Local plugin missing: $plugin"; fi; done; fi
 	@if [ -n "$${TYPESAFE_API_KEY:-}" ]; then echo "✅ TypeSafe key is set"; elif printf '%s' "$${OPENCODE_PLUGIN_PATHS:-}" | grep -q 'opencode-jev-compactor'; then echo "⚠️ TypeSafe key is not set for Jev compaction"; fi
 	@[ -n "$$SSH_AUTH_SOCK" ] && [ -S "$$SSH_AUTH_SOCK" ] && echo "✅ SSH agent is running" || echo "⚠️ SSH agent is not running or socket not found"
 	@[ -d "$(OPENCODE_CONTAINER_HOME)" ] && echo "✅ Persistent directory exists" || echo "❌ Persistent directory does not exist"
