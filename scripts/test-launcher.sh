@@ -519,17 +519,17 @@ assert_command_tail opencode start
 reset_docker_artifacts
 run_launcher_with "$V2_CONTAINER_LAUNCHER" auth ls > "$OUTPUT"
 mapfile -t docker_args < "$DOCKER_LOG"
-assert_command_tail opencode2 auth ls
+assert_command_tail opencode auth ls
 
 reset_docker_artifacts
 run_launcher_with "$V2_CONTAINMENT_LAUNCHER" --version > "$OUTPUT"
 mapfile -t docker_args < "$DOCKER_LOG"
-assert_command_tail opencode2 --version
+assert_command_tail opencode --version
 
 reset_docker_artifacts
 run_launcher_with "$V2_CONTAINER_LAUNCHER" --server http://host.containers.internal:4096 > "$OUTPUT"
 mapfile -t docker_args < "$DOCKER_LOG"
-assert_command_tail opencode2 --server http://host.containers.internal:4096
+assert_command_tail opencode --server http://host.containers.internal:4096
 
 reset_docker_artifacts
 rm -f "$TOOL_STAGE_CHECK"
@@ -1043,27 +1043,27 @@ reset_sbx_artifacts
 run_launcher_with "$V2_CONTAINER_LAUNCHER" --web-server start --web-port 4703 > "$OUTPUT"
 mapfile -t docker_args < "$DOCKER_LOG"
 v2_workspace_hash="$workspace_hash"
-v2_container_name="opencode2-web-workspace-${v2_workspace_hash}-4703"
+v2_container_name="opencode-web-workspace-${v2_workspace_hash}-4703"
 v2_network_name="${v2_container_name}-network"
 v2_credentials_file="$CONTAINER_HOME/web-server/${v2_container_name}.credentials"
-assert_arg_pair --env OPENCODE_WEB_VARIANT=v2
+assert_arg_pair --env OPENCODE_WEB_VARIANT=stable
 assert_arg_pair --publish "127.0.0.1:4703:4703"
 assert_arg_pair --name "$v2_container_name"
 assert_command_tail /tmp/opencode-web-entrypoint 4703
 assert_line "  Stop and remove: opencode2-container --workspace $WORKSPACE --web-server stop --web-port 4703" "$OUTPUT"
 assert_line "  Basic Auth credentials: $v2_credentials_file" "$OUTPUT"
-grep -Fq -- "http://127.0.0.1:4703/api/health" "$CURL_EVENTS" || fail "v2 readiness must use /api/health"
-[[ "$(head -n 1 "$v2_credentials_file")" == "OPENCODE_SERVER_USERNAME=opencode" ]] || fail "v2 must use the fixed Basic Auth username"
-[[ "$(stat -c '%s' "$v2_credentials_file")" == "124" ]] || fail "v2 credentials file has unexpected size"
+grep -Fq -- "http://127.0.0.1:4703/global/health" "$CURL_EVENTS" || fail "compatibility alias must use latest OpenCode health endpoint"
+[[ "$(head -n 1 "$v2_credentials_file")" =~ ^OPENCODE_SERVER_USERNAME=opencode-[0-9a-f]{16}$ ]] || fail "compatibility alias must use latest OpenCode credentials"
+[[ "$(stat -c '%s' "$v2_credentials_file")" == "141" ]] || fail "compatibility alias credentials file has unexpected size"
 run_launcher_with "$V2_CONTAINER_LAUNCHER" --web-server stop --web-port 4703 > "$OUTPUT"
 assert_event "rm -f $DOCKER_RUN_ID"
 assert_event "network rm $DOCKER_NETWORK_ID"
 
 reset_sbx_artifacts
 run_launcher_with "$V2_SANDBOX_LAUNCHER" --workspace "$WORKSPACE" -- --continue > "$OUTPUT"
-assert_line "create --name opencode2-workspace --memory 8g --cpus 4 --template localhost/opencode-containment:latest opencode $WORKSPACE" "$SBX_LOG"
+assert_line "create --name opencode-workspace --memory 8g --cpus 4 --template localhost/opencode-containment:latest opencode $WORKSPACE" "$SBX_LOG"
 grep -Fq -- "exec -e OPENCODE_PROFILE=native" "$SBX_LOG" || fail "v2 sandbox must export the profile"
-grep -Fq -- "opencode2 --continue" "$SBX_LOG" || fail "v2 sandbox must execute opencode2"
+grep -Fq -- "opencode --continue" "$SBX_LOG" || fail "compatibility sandbox alias must execute latest opencode"
 
 reset_docker_artifacts
 if DOCKER_NETWORK_SIGNAL=TERM run_launcher --web-server --web-port 4701 > "$OUTPUT" 2>&1; then
