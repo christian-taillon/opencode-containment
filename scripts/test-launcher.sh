@@ -104,10 +104,12 @@ TOOL_SIGNAL_FILE="$TEST_DIR/tool-signal"
 TOOL_ACTIVE_FILE="$TEST_DIR/tool-active"
 TOOL_ACTIVE_PID_FILE="$TEST_DIR/tool-active.pid"
 TOOL_STDIN_CHECK_FILE="$TEST_DIR/tool-stdin-check"
+PLUGIN_DIR="$TEST_DIR/plugin-checkout"
+PLUGIN_DIR_TWO="$TEST_DIR/plugin-checkout-two"
 DOCKER_RUN_ID="aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
 SBX_LOG="$TEST_DIR/sbx-log"
 SBX_STATE="$TEST_DIR/sbx-state"
-mkdir -p "$FAKE_BIN" "$WORKSPACE" "$TEST_HOME" "$INSTALLED_BIN" "$EXPLICIT_TOOL_DIR" "$OTHER_TOOL_DIR"
+mkdir -p "$FAKE_BIN" "$WORKSPACE" "$TEST_HOME" "$INSTALLED_BIN" "$EXPLICIT_TOOL_DIR" "$OTHER_TOOL_DIR" "$PLUGIN_DIR" "$PLUGIN_DIR_TWO"
 ln -s "$LAUNCHER" "$LINKED_LAUNCHER"
 
 printf '#!/bin/sh\necho bare\n' > "$FAKE_BIN/bare-tool"
@@ -512,6 +514,22 @@ mapfile -t docker_args < "$DOCKER_LOG"
 assert_command_tail opencode auth ls
 
 reset_docker_artifacts
+OPENCODE_LOCAL_PLUGIN_DIRS="$PLUGIN_DIR:$PLUGIN_DIR_TWO:$PLUGIN_DIR" TYPESAFE_API_KEY="jev-test-key" run_launcher auth ls > "$OUTPUT"
+mapfile -t docker_args < "$DOCKER_LOG"
+assert_arg_pair --volume "$PLUGIN_DIR:$PLUGIN_DIR:ro"
+assert_arg_pair --volume "$PLUGIN_DIR_TWO:$PLUGIN_DIR_TWO:ro"
+assert_arg_pair --env TYPESAFE_API_KEY=jev-test-key
+plugin_mount_count="$(grep -Fxc -- "$PLUGIN_DIR:$PLUGIN_DIR:ro" "$DOCKER_LOG")"
+[[ "$plugin_mount_count" == "1" ]] || fail "duplicate local plugin directories must mount once"
+
+reset_docker_artifacts
+if OPENCODE_LOCAL_PLUGIN_DIRS="$TEST_HOME" run_launcher auth ls > "$OUTPUT" 2>&1; then
+    fail "mounting the entire home directory as a local plugin must be rejected"
+fi
+assert_line "Error: Refusing broad local plugin mount: $TEST_HOME" "$OUTPUT"
+[[ ! -e "$DOCKER_LOG" ]] || fail "Docker should not run after rejecting a broad local plugin mount"
+
+reset_docker_artifacts
 run_launcher start > "$OUTPUT"
 mapfile -t docker_args < "$DOCKER_LOG"
 assert_command_tail opencode start
@@ -519,17 +537,17 @@ assert_command_tail opencode start
 reset_docker_artifacts
 run_launcher_with "$V2_CONTAINER_LAUNCHER" auth ls > "$OUTPUT"
 mapfile -t docker_args < "$DOCKER_LOG"
-assert_command_tail opencode2 auth ls
+assert_command_tail opencode auth ls
 
 reset_docker_artifacts
 run_launcher_with "$V2_CONTAINMENT_LAUNCHER" --version > "$OUTPUT"
 mapfile -t docker_args < "$DOCKER_LOG"
-assert_command_tail opencode2 --version
+assert_command_tail opencode --version
 
 reset_docker_artifacts
 run_launcher_with "$V2_CONTAINER_LAUNCHER" --server http://host.containers.internal:4096 > "$OUTPUT"
 mapfile -t docker_args < "$DOCKER_LOG"
-assert_command_tail opencode2 --server http://host.containers.internal:4096
+assert_command_tail opencode --server http://host.containers.internal:4096
 
 reset_docker_artifacts
 rm -f "$TOOL_STAGE_CHECK"
@@ -1040,30 +1058,34 @@ assert_no_temporary_web_files
 
 reset_docker_artifacts
 reset_sbx_artifacts
-run_launcher_with "$V2_CONTAINER_LAUNCHER" --web-server start --web-port 4703 > "$OUTPUT"
+run_launcher_with "$V2_CONTAINER_LAUNCHER" --web-server start --web-port 4703 > "$OUTPUT" 2>&1
 mapfile -t docker_args < "$DOCKER_LOG"
-v2_workspace_hash="$workspace_hash"
-v2_container_name="opencode2-web-workspace-${v2_workspace_hash}-4703"
-v2_network_name="${v2_container_name}-network"
-v2_credentials_file="$CONTAINER_HOME/web-server/${v2_container_name}.credentials"
-assert_arg_pair --env OPENCODE_WEB_VARIANT=v2
+compat_workspace_hash="$workspace_hash"
+compat_container_name="opencode-web-workspace-${compat_workspace_hash}-4703"
+compat_credentials_file="$CONTAINER_HOME/web-server/${compat_container_name}.credentials"
+assert_arg_pair --env OPENCODE_WEB_VARIANT=stable
 assert_arg_pair --publish "127.0.0.1:4703:4703"
-assert_arg_pair --name "$v2_container_name"
+assert_arg_pair --name "$compat_container_name"
 assert_command_tail /tmp/opencode-web-entrypoint 4703
-assert_line "  Stop and remove: opencode2-container --workspace $WORKSPACE --web-server stop --web-port 4703" "$OUTPUT"
-assert_line "  Basic Auth credentials: $v2_credentials_file" "$OUTPUT"
-grep -Fq -- "http://127.0.0.1:4703/api/health" "$CURL_EVENTS" || fail "v2 readiness must use /api/health"
-[[ "$(head -n 1 "$v2_credentials_file")" == "OPENCODE_SERVER_USERNAME=opencode" ]] || fail "v2 must use the fixed Basic Auth username"
-[[ "$(stat -c '%s' "$v2_credentials_file")" == "124" ]] || fail "v2 credentials file has unexpected size"
-run_launcher_with "$V2_CONTAINER_LAUNCHER" --web-server stop --web-port 4703 > "$OUTPUT"
+assert_line "  Stop and remove: opencode-container --workspace $WORKSPACE --web-server stop --web-port 4703" "$OUTPUT"
+assert_line "  Basic Auth credentials: $compat_credentials_file" "$OUTPUT"
+grep -Fq -- "http://127.0.0.1:4703/global/health" "$CURL_EVENTS" || fail "compatibility alias must use the latest web health endpoint"
+[[ "$(head -n 1 "$compat_credentials_file")" =~ ^OPENCODE_SERVER_USERNAME=opencode-[0-9a-f]{16}$ ]] || fail "compatibility alias must use latest web credentials"
+run_launcher --web-server stop --web-port 4703 > "$OUTPUT"
 assert_event "rm -f $DOCKER_RUN_ID"
 assert_event "network rm $DOCKER_NETWORK_ID"
 
 reset_sbx_artifacts
-run_launcher_with "$V2_SANDBOX_LAUNCHER" --workspace "$WORKSPACE" -- --continue > "$OUTPUT"
-assert_line "create --name opencode2-workspace --memory 8g --cpus 4 --template localhost/opencode-containment:latest opencode $WORKSPACE" "$SBX_LOG"
-grep -Fq -- "exec -e OPENCODE_PROFILE=native" "$SBX_LOG" || fail "v2 sandbox must export the profile"
-grep -Fq -- "opencode2 --continue" "$SBX_LOG" || fail "v2 sandbox must execute opencode2"
+run_launcher_with "$V2_SANDBOX_LAUNCHER" --workspace "$WORKSPACE" -- --continue > "$OUTPUT" 2>&1
+assert_line "create --name opencode-workspace --memory 8g --cpus 4 --template localhost/opencode-containment:latest opencode $WORKSPACE" "$SBX_LOG"
+grep -Fq -- "exec -e OPENCODE_PROFILE=native" "$SBX_LOG" || fail "sandbox alias must export the profile"
+grep -Fq -- "opencode --continue" "$SBX_LOG" || fail "sandbox alias must execute latest opencode"
+
+reset_sbx_artifacts
+OPENCODE_LOCAL_PLUGIN_DIRS="$PLUGIN_DIR" TYPESAFE_API_KEY="jev-test-key" run_launcher_with "$SCRIPT_DIR/bin/opencode-sandbox" --workspace "$WORKSPACE" -- --continue > "$OUTPUT" 2>&1
+assert_line "create --name opencode-workspace --memory 8g --cpus 4 --template localhost/opencode-containment:latest opencode $WORKSPACE $PLUGIN_DIR:ro" "$SBX_LOG"
+grep -Fq -- "TYPESAFE_API_KEY=jev-test-key" "$SBX_LOG" || fail "sandbox must pass TYPESAFE_API_KEY when explicitly set"
+grep -Fq -- "opencode --continue" "$SBX_LOG" || fail "sandbox must execute latest opencode"
 
 reset_docker_artifacts
 if DOCKER_NETWORK_SIGNAL=TERM run_launcher --web-server --web-port 4701 > "$OUTPUT" 2>&1; then
