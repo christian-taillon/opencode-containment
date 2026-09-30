@@ -351,6 +351,12 @@ the same absolute path used in the plugin URL.
 
 The Jev compaction project has first-class support:
 
+Build/validate the checkout once after pulling updates:
+
+```bash
+make setup-jev
+```
+
 - `$HOME/github/opencode-jev-compactor` is automatically mounted read-only at
   the same absolute path when it exists.
 - Override the path with `OPENCODE_JEV_PLUGIN_DIR`.
@@ -478,6 +484,7 @@ SECURITY_REPORT.md         security threat model and mitigations
 - `make build`: Build the Docker image
 - `make update`: Pull the base image and rebuild without Docker cache
 - `make setup`: Create necessary persistent directories
+- `make setup-jev`: Install dependencies, typecheck, build, and test the trusted local Jev compaction checkout
 - `make doctor`: Verify prerequisites and setup
 - `make doctor-sandbox`: Verify Docker Sandboxes prerequisites and host runtime access
 - `make setup-sandbox-policy`: Apply project Docker Sandboxes network allowlist entries
