@@ -290,7 +290,30 @@ append_local_plugin_mounts() {
 
     for raw in "${plugin_dirs[@]}"; do
         [[ -n "$raw" ]] || continue
-        if [[ "$raw" == *
+        if [[ "$raw" =~ [[:cntrl:]] ]]; then
+            echo "Error: OPENCODE_LOCAL_PLUGIN_DIRS contains an unsafe path." >&2
+            return 1
+        fi
+        if [[ ! -d "$raw" ]]; then
+            echo "Error: Local OpenCode plugin directory does not exist: $raw" >&2
+            return 1
+        fi
+        resolved="$(resolve_path "$raw")" || {
+            echo "Error: Could not resolve local OpenCode plugin directory: $raw" >&2
+            return 1
+        }
+        if [[ "$resolved" == "/" || "$resolved" == "$real_home" ]]; then
+            echo "Error: Refusing broad local plugin mount: $resolved" >&2
+            return 1
+        fi
+        for existing in "${mounted[@]}"; do
+            [[ "$existing" != "$resolved" ]] || continue 2
+        done
+        mounted+=("$resolved")
+        DOCKER_ARGS+=(--volume "$resolved:$resolved:$RO_MOUNT_OPTS")
+    done
+}
+
 sanitize_web_container_name() {
     local raw="$1"
     local sanitized
