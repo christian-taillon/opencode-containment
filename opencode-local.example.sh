@@ -19,7 +19,6 @@
 # --- Profile & Image Defaults ---
 # export OPENCODE_PROFILE="native"
 # export OPENCODE_IMAGE="opencode-containment:latest"
-# export OPENCODE2_CONTAINER_HOME="$HOME/.local/share/opencode2-container"
 
 # --- Optional Local Web Server ---
 # `opencode-container --web-server start` publishes this port to 127.0.0.1 by
@@ -53,11 +52,15 @@
 # export MARKSMAN_VERSION="2026-02-08"
 # export MARKSMAN_SHA256_X86_64="<linux-musl-x64-sha256>"
 # export MARKSMAN_SHA256_AARCH64="<linux-musl-arm64-sha256>"
-# export OPENCODE2_VERSION="0.0.0-beta-18743"
-# Legacy x86_64 fallback (prefer the platform-specific values below).
-# export OPENCODE2_TARBALL_SHA512="<sha512-for-the-selected-x86_64-tarball>"
-# export OPENCODE2_TARBALL_SHA512_X86_64="<sha512-for-the-selected-x86_64-tarball>"
-# export OPENCODE2_TARBALL_SHA512_AARCH64="<sha512-for-the-selected-arm64-tarball>"
+
+# --- Trusted Local OpenCode Plugins ---
+# Colon-separated absolute checkout paths mounted read-only at the same path
+# inside container/sandbox runtimes. This lets file:// plugin specs in the
+# shared OpenCode config resolve without mounting all of $HOME.
+# export OPENCODE_PLUGIN_PATHS="$HOME/github/opencode-jev-compactor"
+#
+# Pass the TypeSafe key only when Jev compaction is enabled.
+# export TYPESAFE_API_KEY="..."
 
 # --- OpenCode Config Override (JSON) ---
 # Set this to pass custom config into the container:
