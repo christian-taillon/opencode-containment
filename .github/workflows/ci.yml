@@ -4,6 +4,7 @@ on:
   push:
     branches:
       - main
+      - sandbox-alpha-week1
   pull_request:
   workflow_dispatch:
 
@@ -28,6 +29,8 @@ jobs:
             bin/opencode2-container \
             bin/opencode2-containment \
             bin/opencode2-sandbox \
+            bin/opencode-sandbox-alpha \
+            scripts/install-sbx.sh \
             scripts/build-image.sh \
             scripts/container-init.sh \
             scripts/web-server-entrypoint.sh \
@@ -39,6 +42,11 @@ jobs:
 
       - name: Test launcher
         run: bash scripts/test-launcher.sh
+
+      - name: Test standalone sandbox alpha
+        run: |
+          mkdir -p /tmp/opencode
+          python3 -B scripts/test-sandbox-alpha.py
 
       - name: Build image
         env:

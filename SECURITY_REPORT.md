@@ -133,6 +133,49 @@ same state/runtime semantics.
 | `opencode-local.sh` can defeat containment | Accepted | The local override hook can add unsafe mounts, privileges, or credentials. This is the same tradeoff Distrobox makes. Documented forbidden patterns; cannot enforce programmatically without removing the hook entirely, which kills usability. |
 | Selected host executable behavior | Accepted with explicit opt-in | `--with-tool` imports only the requested executable snapshot (a selected symlink is copied from its resolved target). Additional symlink targets, libraries, interpreters, desktop/IPC support, and host glibc compatibility are not provided automatically; the executable still runs inside the container with the container's permissions and network. The opened source descriptor closes replacement races after open, but not hostile changes during validation/open or in-place writes during copying. |
 
+## Standalone Sandboxes alpha (separate opt-in path)
+
+`opencode-sandbox-alpha` is a week-one Linux x86_64 experiment using sbx v0.46.0
+and pinned OpenCode V2.0.22. Existing latest-runtime container/sandbox launchers,
+their Jev integration, and the deployed service remain unchanged. The alpha is
+an in-sandbox UI, not a native host attach backend or automatic fallback.
+
+- Digest-pinned shell template and SHA-512-verified V2 artifact; no image rebuild.
+- Workspace-only sharing requested, shared skills off, no port publication.
+- Private guest HOME/XDG state; no implicit host config/auth/credential import.
+- Narrow host client environment without SSH-agent/provider credentials.
+  Configured fixed SSH socket or clipboard sharing fails closed before launch.
+- Built-in/global/project/CLI containment precedence. Project settings can only
+  lower CPU/memory within trusted limits; they cannot approve templates, host
+  executables, credentials, broader networking, or additional mounts.
+- Dedicated global and native project OpenCode configuration remain trusted
+  guest code: plugins/MCP/tools can read the workspace and use permitted networks.
+- Private per-workspace records/locking check UUID/workspace/runtime binding;
+  ordinary exit and handled SIGINT/SIGTERM explicitly stop the VM. Sessions/auth
+  persist. No automatic deletion; pending/ambiguous creation needs inspection.
+
+The microVM has writable root, guest sudo and `NoNewPrivs: 0`, unlike the
+container hardening above. Existing global/template policies can broaden egress;
+endpoint additions are not a complete firewall. CLI mutations address names,
+so UUID prechecks cannot prevent concurrent external replacement races. Do not
+mix direct sbx mutations with launcher use. SIGKILL/host crashes need explicit
+`opencode-sandbox-alpha stop` recovery against the original reachable daemon.
+
+Validation on the Fedora x86_64 host: 17 focused tests, actual installer, default
+2 CPU/4 GiB provisioning, PTY UI exit, local Qwen edit/shell inference, session
+continuation, credential/agent sentinel non-forwarding, repeated SIGINT/SIGTERM
+cleanup, zero published ports and temporary-rule removal passed. Credential-free
+HTTPS probes returned OpenAI HTTP 401 and models.dev HTTP 200; this proves
+reachability, not authorized external inference. Evidence is private under
+`/tmp/opencode/team-alpha.sC01Fb/`. Existing Podman IDs/service were unchanged.
+
+External-provider authorized inference/OAuth, other hosts/distros, arm64,
+Windows/macOS, and native sandbox attach are not validated for this alpha.
+Fedora is outside Docker's supported distro. Week-one testers should use only
+test-scoped API keys or local models and non-sensitive disposable workspaces.
+See the [tester checklist](README.md#week-one-tester-checklist) and
+[alpha configuration](docs/local-overrides.md#standalone-sandboxes-alpha).
+
 ## Vulnerability Scanning
 
 GitHub Actions CI builds the image and scans it with Trivy, focusing on CRITICAL and HIGH severity findings. Results are uploaded to GitHub Code Scanning. This catches known vulnerabilities in the base image and installed packages at build time, but it is a point-in-time scan, not continuous monitoring of a running environment.

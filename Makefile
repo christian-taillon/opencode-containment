@@ -1,4 +1,4 @@
-.PHONY: help build update setup setup-jev run run-native run-secure run-sandbox run-opencode2 run-opencode2-sandbox setup-sandbox-policy doctor doctor-sandbox sync-config clean clean-sandbox-smoke shell-install
+.PHONY: help build update setup setup-jev run run-native run-secure run-sandbox run-opencode2 run-opencode2-sandbox setup-sandbox-policy doctor doctor-sandbox sync-config clean clean-sandbox-smoke shell-install shell-install-sandbox-alpha run-sandbox-alpha test-sandbox-alpha
 
 # Project variables
 PROJECT_NAME := opencode-containment
@@ -47,6 +47,22 @@ run-opencode2: ## Compatibility alias for the latest OpenCode container backend
 
 run-opencode2-sandbox: ## Compatibility alias for the latest OpenCode sandbox backend
 	@bash bin/opencode2-sandbox --profile native
+
+run-sandbox-alpha: ## Run the separate pinned standalone V2 sandbox alpha
+	@bash bin/opencode-sandbox-alpha
+
+test-sandbox-alpha: ## Test standalone alpha configuration/ownership without a runtime
+	@python3 -B scripts/test-sandbox-alpha.py
+
+shell-install-sandbox-alpha: ## Install only the alpha launcher; never overwrite user files
+	@mkdir -p "$(HOME)/.local/bin"
+	@if [ -e "$(HOME)/.local/bin/opencode-sandbox-alpha" ] || [ -L "$(HOME)/.local/bin/opencode-sandbox-alpha" ]; then \
+		[ "$$(readlink "$(HOME)/.local/bin/opencode-sandbox-alpha")" = "$(CURDIR)/bin/opencode-sandbox-alpha" ] || \
+		{ echo 'Refusing to overwrite an existing opencode-sandbox-alpha; move it aside explicitly.' >&2; exit 1; }; \
+	else \
+		ln -s "$(CURDIR)/bin/opencode-sandbox-alpha" "$(HOME)/.local/bin/opencode-sandbox-alpha"; \
+	fi
+	@echo "Installed opencode-sandbox-alpha to $(HOME)/.local/bin (keep this checkout; add ~/.local/bin to PATH)."
 
 sync-config: ## Force-refresh OpenCode cache/state from host into container persistent state
 	@bash bin/opencode-container --sync-config

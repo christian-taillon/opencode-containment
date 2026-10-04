@@ -1,0 +1,4 @@
+#!/usr/bin/env bash
+set -euo pipefail
+SOURCE="$(realpath "${BASH_SOURCE[0]}")"
+exec python3 -B "$(dirname "$SOURCE")/../scripts/sandbox_alpha.py" "$@"

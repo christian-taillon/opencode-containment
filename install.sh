@@ -11,6 +11,21 @@ require_cmd() {
     fi
 }
 
+case "${1:-}" in
+    --sandbox-alpha)
+        shift
+        [[ $# == 0 ]] || { echo 'Unknown sandbox installer argument' >&2; exit 1; }
+        require_cmd python3
+        require_cmd make
+        python3 -B "$ROOT_DIR/scripts/sandbox_alpha.py" setup --workspace "$ROOT_DIR" --no-project-config
+        make -C "$ROOT_DIR" shell-install-sandbox-alpha
+        echo 'Standalone alpha ready: run opencode-sandbox-alpha from a project.'
+        exit 0
+        ;;
+    --help) echo 'Usage: install.sh [--sandbox-alpha]'; exit 0 ;;
+esac
+[[ $# == 0 ]] || { echo 'Unknown installer argument' >&2; exit 1; }
+
 echo "==> Checking prerequisites"
 require_cmd docker
 require_cmd make

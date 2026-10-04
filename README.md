@@ -18,6 +18,85 @@ The tone is practical on purpose: field notes, not framework worship. It is a st
 
 This repo includes a prompt injection / data exfiltration demo under `demo/`. It builds a fake lab repo with hidden instructions in common files (README HTML comments, code comments, `copilot-instructions.md`, TODO comments) and shows how agents can be tricked into exfiltrating environment data, and how containment blocks host secrets even when the model follows the instructions. See `demo/README.md` for setup and walkthrough.
 
+## Standalone Sandboxes alpha
+
+Week-one testers should use the `sandbox-alpha-week1` branch. This opt-in path
+is separate from the existing latest-runtime container/sandbox and Jev workflows;
+those launchers, image, and host integrations are unchanged. Only this alpha
+uses the pinned V2 artifact below. It does not mount a host Jev checkout or
+inherit its configuration/auth automatically.
+
+With **Linux x86_64, Python 3.9+, Make, `sbx` v0.46.0 installed, and
+`sbx login` completed**:
+
+```bash
+./install.sh --sandbox-alpha  # no Podman/Docker Engine image build
+cd /path/to/your/project
+opencode-sandbox-alpha       # V2 UI inside the workspace microVM
+```
+
+Ensure `~/.local/bin` is on PATH and keep this checkout (the installed launcher
+is a symlink). Installation adds only `opencode-sandbox-alpha` and refuses to
+overwrite an unrelated existing launcher. The launcher discovers `sbx` in PATH or its
+known user-install locations, starts its daemon when needed, downloads and
+verifies pinned V2.0.22 once, and provisions a workspace-specific sandbox.
+Defaults: 2 CPUs, 4 GiB, pinned shell template, shared skills off, no host
+config/auth imports, and explicit provider-domain network allowances. The
+sandbox stops when the UI exits or the launcher receives SIGINT/SIGTERM;
+isolated credentials, sessions, and cache persist. No ports are published.
+
+Docker sign-in is **not model-provider sign-in**. Use OpenCode `/connect` then
+`/models`, or configure a local provider. Provider authorization remains inside
+the sandbox; additional provider endpoints need an explicit trusted allowance.
+For the first week, prefer a provider API key or the documented local Ollama
+setup. Subscription/browser OAuth is **not validated**; callback flows may not
+work without port publication. Do not publish ports to work around it during
+this test. Project `opencode.json(c)` can define models, agents, plugins, MCP, and skills.
+Global defaults and project override examples are in
+[local overrides](docs/local-overrides.md#standalone-sandboxes-alpha).
+
+```bash
+opencode-sandbox-alpha config   # effective containment defaults/sources; no runtime
+opencode-sandbox-alpha doctor   # diagnose runtime/account/sharing settings
+opencode-sandbox-alpha status
+opencode-sandbox-alpha stop
+opencode-sandbox-alpha -- --continue
+```
+
+This is **not native host attach** and does not replace the legacy launchers.
+The default Sandboxes OpenCode image ships V1, so this path provisions its own
+matching V2. Its microVM has a writable root and guest sudo, not container
+hardening parity. Name-based runtime operations cannot prevent external
+replacement races; resource UUID checks and a per-workspace lock detect ordinary
+collisions/replacement. Fixed SSH-agent forwarding and clipboard sharing are
+rejected rather than silently changing global `sbx` settings. Fedora remains
+outside Docker's supported distro; see [security limits](SECURITY_REPORT.md).
+
+### Week-one tester checklist
+
+Use a disposable clone of a non-sensitive repository, not production code.
+The workspace is writable: edits/deletions are real, and workspace secrets are
+visible to the agent. Keep credentials out of the test workspace; use only a
+test-scoped provider key. Windows, macOS, and arm64 are outside this rollout.
+
+1. Run `opencode-sandbox-alpha doctor`, then launch from the test project.
+2. Connect/select a model; try a small explanation, file edit, and shell command.
+3. Quit, relaunch, and check your session history and edited files persist.
+4. Try a project/global config override if you normally use one. Package
+   registries, Git remotes, and MCP endpoints are not generally allowed by the
+   provider-only defaults; request specific endpoints rather than broadening
+   policy globally.
+5. Check `opencode-sandbox-alpha status` after exit: it should be stopped.
+   Use `opencode-sandbox-alpha stop` after a crash; do not delete guest state.
+
+Report setup failures and unexpected behavior in
+[GitHub issues](https://github.com/christian-taillon/opencode-containment/issues),
+with checkout commit (`git rev-parse HEAD` in this checkout), OS/architecture,
+`sbx version`, provider/model, sanitized `doctor` output, and minimal reproduction
+steps. Review diagnostics before posting; never include keys, auth files,
+prompts, private source, or full daemon bundles. Positive feedback is useful too:
+note what worked and where setup or daily use felt awkward.
+
 ## Quick Start
 
 1. Clone and enter the repository:
@@ -37,7 +116,8 @@ This repo includes a prompt injection / data exfiltration demo under `demo/`. It
 That is the normal path. The workspace is your current project directory, mounted read-write at `/workspace`; host config mounts stay read-only, and OpenCode auth is copied into isolated container state.
 
 OpenCode comes directly from `ghcr.io/anomalyco/opencode:latest`. The image does
-not install a second pinned preview CLI. The historical `opencode2-*` command
+not install a second pinned preview CLI (the standalone alpha downloads its
+own pinned binary separately, not into this image). The historical `opencode2-*` command
 names remain compatibility aliases, but they execute the same latest `opencode`
 binary and share the same state/runtime semantics.
 
