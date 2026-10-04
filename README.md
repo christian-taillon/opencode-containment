@@ -20,7 +20,7 @@ This repo includes a prompt injection / data exfiltration demo under `demo/`. It
 
 ## Standalone Sandboxes alpha
 
-Week-one testers should use the `sandbox-alpha-week1` branch. This opt-in path
+The standalone alpha is available on `main`. This opt-in path
 is separate from the existing latest-runtime container/sandbox and Jev workflows;
 those launchers, image, and host integrations are unchanged. Only this alpha
 uses the pinned V2 artifact below. It does not mount a host Jev checkout or
@@ -39,7 +39,7 @@ Linux installer. It requires those host tools and rejects AppArmor hosts.
 Use a new checkout so existing work and launcher installations are not replaced:
 
 ```bash
-git clone --branch sandbox-alpha-week1 --single-branch \
+git clone --branch main --single-branch \
   https://github.com/christian-taillon/opencode-containment.git \
   opencode-containment-alpha
 cd opencode-containment-alpha
