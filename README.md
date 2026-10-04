@@ -26,11 +26,25 @@ those launchers, image, and host integrations are unchanged. Only this alpha
 uses the pinned V2 artifact below. It does not mount a host Jev checkout or
 inherit its configuration/auth automatically.
 
-With **Linux x86_64, Python 3.9+, Make, `sbx` v0.46.0 installed, and
-`sbx login` completed**:
+Public **alpha**, not a production-ready or multi-harness release. Live-tested
+on one Fedora x86_64 host; other Linux distributions still need fresh-host
+validation. Windows, macOS, and arm64 are outside this rollout.
+
+Prerequisites: **Linux x86_64 with accessible KVM, Git, Python 3.9+, Make,
+`sbx` v0.46.0 installed, and `sbx login` completed**. Follow Docker's
+[Sandboxes installation guide](https://docs.docker.com/ai/sandboxes/) for your
+host; `scripts/install-sbx.sh` is a Fedora/Podman-specific helper, not a general
+Linux installer. It requires those host tools and rejects AppArmor hosts.
+
+Use a new checkout so existing work and launcher installations are not replaced:
 
 ```bash
+git clone --branch sandbox-alpha-week1 --single-branch \
+  https://github.com/christian-taillon/opencode-containment.git \
+  opencode-containment-alpha
+cd opencode-containment-alpha
 ./install.sh --sandbox-alpha  # no Podman/Docker Engine image build
+export PATH="$HOME/.local/bin:$PATH"
 cd /path/to/your/project
 opencode-sandbox-alpha       # V2 UI inside the workspace microVM
 ```
@@ -54,6 +68,14 @@ work without port publication. Do not publish ports to work around it during
 this test. Project `opencode.json(c)` can define models, agents, plugins, MCP, and skills.
 Global defaults and project override examples are in
 [local overrides](docs/local-overrides.md#standalone-sandboxes-alpha).
+
+**Credential boundary:** `/connect` credentials and OAuth tokens persist in
+OpenCode's guest database. Explicit `--env` values persist in a private guest
+file and enter the process environment. The guest process can access them;
+this is not a host-side proxy that injects credentials into outbound requests.
+Stopping the sandbox does not erase secrets. See
+[credential storage](docs/local-overrides.md#alpha-credential-storage) and
+[recovery](docs/local-overrides.md#lifecycle-and-recovery) before resetting anything.
 
 ```bash
 opencode-sandbox-alpha config   # effective containment defaults/sources; no runtime

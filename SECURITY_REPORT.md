@@ -143,6 +143,10 @@ an in-sandbox UI, not a native host attach backend or automatic fallback.
 - Digest-pinned shell template and SHA-512-verified V2 artifact; no image rebuild.
 - Workspace-only sharing requested, shared skills off, no port publication.
 - Private guest HOME/XDG state; no implicit host config/auth/credential import.
+  `/connect` accounts/tokens persist in the guest database; opted-in environment
+  secrets persist in a mode-0600 guest file and enter the process environment.
+  Guest processes can access these credentials. This is not host-side provider
+  credential injection or protection against malicious guest tools/plugins.
 - Narrow host client environment without SSH-agent/provider credentials.
   Configured fixed SSH socket or clipboard sharing fails closed before launch.
 - Built-in/global/project/CLI containment precedence. Project settings can only
@@ -175,6 +179,11 @@ Fedora is outside Docker's supported distro. Week-one testers should use only
 test-scoped API keys or local models and non-sensitive disposable workspaces.
 See the [tester checklist](README.md#week-one-tester-checklist) and
 [alpha configuration](docs/local-overrides.md#standalone-sandboxes-alpha).
+For storage and non-destructive recovery steps, see
+[credential storage](docs/local-overrides.md#alpha-credential-storage) and
+[lifecycle/recovery](docs/local-overrides.md#lifecycle-and-recovery). Host launcher
+records are not guest backups; stopping does not erase credentials, and backup
+copies remain sensitive. Automatic adoption/restore/migration is not advertised.
 
 ## Vulnerability Scanning
 

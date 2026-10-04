@@ -165,6 +165,30 @@ Global `environment` is a map of literal single-line values, never shell code.
 Runtime/XDG/loader/SSH/MCP variables are reserved. Imported values live privately
 in guest state: do not commit credentials in project configuration.
 
+### Alpha credential storage
+
+The following applies only to the standalone alpha, not the host-auth mirroring
+used by the existing launchers:
+
+| Data | Location and access |
+|------|---------------------|
+| `/connect` API keys and OAuth tokens | OpenCode's SQLite database under private guest XDG data. Tokens/keys are available to the guest OpenCode process; use its account UI or `auth` commands to manage them, not direct database edits. |
+| Explicit `--env NAME` / global `environment` values | Guest `/home/agent/.local/share/opencode-containment/alpha/environment.json` (mode `0600`), loaded into OpenCode's environment. Refreshes from effective settings each launch; this is persistent storage, not transient stream injection. |
+| Guest sessions, cache and runtime state | Under `/home/agent/.local/share/opencode-containment/alpha/`, persisted by `sbx` in its host-backed VM storage. Not stored in the shared project or ordinary host OpenCode state. |
+| Launcher records and verified binary cache | `${XDG_DATA_HOME:-~/.local/share}/opencode-containment/sandbox-alpha`, or explicit `--state-dir`. Records contain ownership/configuration metadata, not imported environment values. They are not a backup of guest credentials or sessions. |
+
+Host users/processes with access to the VM storage remain trusted. Private file
+modes are not a secret vault or proof that guest tools/plugins cannot read keys.
+This project does **not** implement host-side credential injection into provider
+request streams. Workspace secrets are readable too, even if gitignored.
+
+Stopping a VM preserves credentials. Removing an environment setting removes it
+from the managed guest file on the next successful provisioning, but cannot
+erase earlier logs, process copies, provider accounts or backups. To retire a
+credential, remove the account through OpenCode as appropriate and revoke it
+with the provider. Backups contain secrets: keep them outside the shared
+workspace, private, and out of Git and issue reports.
+
 ### Lifecycle and recovery
 
 The launcher uses a hashed canonical workspace name, private host records, a
@@ -177,13 +201,124 @@ cleanup: use `opencode-sandbox-alpha stop` afterward.
 diagnostics/sharing checks so those cannot block cleanup. Runtime identity is
 still verified; a reachable original daemon is required.
 
-Changing creation settings (CPU/memory/template) does not silently recreate or
-discard sessions: restore the settings, or explicitly back up guest state,
-remove the old sandbox with `sbx`, and archive its `instance.json` before a new
-launch. Ambiguous/partial creation preserves the record for manual inspection.
 The CLI has name-based mutations, so concurrent external `sbx` replacement is
 outside this alpha's guarantee. Do not mix direct `sbx` mutations with launcher
 operations. Account/runtime replacement is not supported transparent recovery.
+
+#### After a crash or interrupted launch
+
+From the **original project directory**, reuse any original `--config` and
+`--state-dir` flags on each launcher command:
+
+```bash
+opencode-sandbox-alpha status
+opencode-sandbox-alpha stop
+opencode-sandbox-alpha
+```
+
+If the daemon is stopped, first start the original runtime with
+`sbx daemon start --detach` (no policy reset), then retry `status`/`stop`.
+Use the same `sbx` executable selected when creating the sandbox, including its
+full path if it is not in PATH. If these commands report an ownership, runtime
+binding or incomplete-record error, **do not delete state or edit the UUID to
+bypass the check**. Follow the inspection steps below. A stopped VM still holds
+your sessions and credentials.
+
+#### Locate and inspect the workspace record
+
+Make sure no launcher for this project is still running. In the original
+project directory, the default record can be located without printing secrets:
+
+```bash
+WORKSPACE="$(pwd -P)"
+ALPHA_STATE="${XDG_DATA_HOME:-$HOME/.local/share}/opencode-containment/sandbox-alpha"
+# If you used --state-dir, set ALPHA_STATE to that exact absolute path instead.
+WORKSPACE_ID="$(python3 -c 'import hashlib,sys; print(hashlib.sha256(sys.argv[1].encode()).hexdigest()[:20])' "$WORKSPACE")"
+RECORD="$ALPHA_STATE/workspaces/$WORKSPACE_ID/instance.json"
+python3 -m json.tool "$RECORD"
+sbx ls --json
+```
+
+Compare the recorded workspace, runtime executable/socket and (if present) UUID
+against the original runtime and listing. Do not select a resource by name
+alone. `sbx inspect NAME --json` can help inspect sharing, but may include
+sensitive metadata; review it locally, not in a public issue. All manual `sbx`
+commands below assume the original runtime and no concurrent external mutations.
+
+**Incomplete creation record, and no matching sandbox exists:** after checking
+the original runtime listing and ensuring creation is no longer in progress,
+archive just the pending record and retry:
+
+```bash
+mv -i -- "$RECORD" "$RECORD.pending-$(date -u +%Y%m%dT%H%M%SZ)"
+opencode-sandbox-alpha
+```
+
+This is only for a record with **no `id` and no sandbox of its recorded name**.
+It preserves the record for diagnosis. Do not use it to bypass a missing or
+changed resource for a completed record.
+
+**Incomplete record, but a sandbox exists:** do not adopt it or change the record
+by hand. If you can establish it was created by your interrupted invocation
+(same original runtime and workspace, no conflicting resource), stop that exact
+name using `sbx stop NAME`, preserve both the VM and record, and request recovery
+help. The alpha has no automatic adoption or supported record-repair command.
+If identity is uncertain, stop here rather than mutating someone else's VM.
+
+#### Preserve guest data before considering recreation
+
+For a **completed, verified-owned** sandbox, obtain its name from `status`, quit
+the UI, and stop it. To save the managed guest directory to private host storage:
+
+```bash
+umask 077
+mkdir -p "$HOME/.local/share/opencode-containment-backups"
+BACKUP="$(mktemp -d "$HOME/.local/share/opencode-containment-backups/alpha.XXXXXX")"
+NAME='replace-with-the-verified-sandbox-name'
+opencode-sandbox-alpha stop
+sbx cp "$NAME:/home/agent/.local/share/opencode-containment/alpha" "$BACKUP/guest-alpha"
+sbx stop "$NAME"
+```
+
+Use an existing trusted, user-owned backup parent outside the project; check the
+copy succeeded and contains the expected guest data. Copying may need to start
+the VM, hence the final stop. Keep the agent/server closed during the copy. This
+backs up the managed OpenCode directory, **not** the whole VM or shared workspace.
+Back up project edits separately. The alpha has no validated automated restore
+or cross-version migration; a copied directory alone is not proof of recovery.
+Do not remove the original VM until a suitable restore has been verified.
+
+#### Resource changes, moved projects and upgrades
+
+- **CPU/memory/template changed:** restore the original effective settings to
+  reuse the existing VM. The launcher will not resize or recreate it silently.
+  To try new settings without deleting sessions, use a separate disposable
+  project clone at a different absolute path; it gets a separate sandbox. Keep
+  the old VM and record. Do not merely move its record to another state directory.
+- **Project moved or deleted:** workspace paths are part of ownership. Restore
+  the original directory/path before launcher cleanup where possible; otherwise
+  inspect the original record/runtime and seek help. Automatic session transfer
+  to a new workspace is not supported.
+- **`sbx` changed:** the executable path, SHA-256 and daemon socket are recorded.
+  Keep v0.46.0 for this alpha; stop resources before any planned runtime change.
+  If the binding differs, do not rewrite it or downgrade a live daemon blindly.
+  Preserve the VM/records and request recovery help.
+- **Checkout moved / installed link points elsewhere:** the installed launcher
+  is a symlink. Inspect `ls -l "$HOME/.local/bin/opencode-sandbox-alpha"`. Restore
+  the checkout location, or move aside only your known old symlink and reinstall
+  from the intended checkout. Never overwrite an unrelated executable.
+- **Cached V2 integrity error:** stop other alpha launch/setup processes. Archive
+  `clients/2.0.22/opencode2` and `opencode2.json` together from `ALPHA_STATE`,
+  then run `./install.sh --sandbox-alpha` from the intended checkout with the
+  same state selection (for custom state, use launcher `setup --state-dir DIR`).
+  Only these are disposable host client-cache files. Do not touch `workspaces`,
+  guest databases, VM storage or provider auth.
+
+For help, report the error, checkout commit, OS, `sbx version`, and sanitized
+reproduction steps in [issues](https://github.com/christian-taillon/opencode-containment/issues).
+Never attach guest backups, databases, environment files or full daemon bundles.
+Do not use `podman system reset`, delete VM storage, or run broad cleanup commands
+as an alpha recovery shortcut.
 
 `sbx` can forward host SSH agents by default. This launcher strips the client
 socket environment and rejects a configured fixed socket; it does not change
