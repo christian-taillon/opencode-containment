@@ -6,7 +6,8 @@
 opencode-local.sh
 **/.env
 **/.env.*
-!**/.env.example
+**/*.env
+.opencode/work/
 
 # Generated local artifacts.
 .ruff_cache/

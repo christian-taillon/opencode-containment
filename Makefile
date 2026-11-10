@@ -1,8 +1,9 @@
-.PHONY: help build update setup setup-jev run run-native run-secure run-sandbox run-opencode2 run-opencode2-sandbox setup-sandbox-policy doctor doctor-sandbox sync-config clean clean-sandbox-smoke shell-install shell-install-sandbox-alpha run-sandbox-alpha test-sandbox-alpha
+.PHONY: help build build-sandbox load-sandbox-template update setup setup-jev run run-native run-secure run-sandbox run-opencode2 run-opencode2-sandbox setup-sandbox-policy doctor doctor-sandbox sync-config clean clean-sandbox-smoke shell-install shell-install-sandbox-alpha run-sandbox-alpha test-sandbox-alpha test test-runtime test-sandbox-image
 
 # Project variables
 PROJECT_NAME := opencode-containment
 IMAGE_NAME := opencode-containment:latest
+SANDBOX_IMAGE_NAME := localhost/opencode-containment-sandbox:latest
 OPENCODE_CONTAINER_HOME ?= $(HOME)/.local/share/opencode-container
 
 help: ## Show all targets with descriptions
@@ -14,7 +15,19 @@ help: ## Show all targets with descriptions
 build: ## Build the Docker image as opencode-containment:latest
 	IMAGE_NAME=$(IMAGE_NAME) bash scripts/build-image.sh
 
-update: ## Pull base image and rebuild without cache, then ensure local state dirs exist
+build-sandbox: ## Build the V2 sbx template with its required agent user and sudo
+	OPENCODE_BUILD_TARGET=sandbox IMAGE_NAME=$(SANDBOX_IMAGE_NAME) bash scripts/build-image.sh
+
+load-sandbox-template: ## Import the locally built V2 template into sbx's separate image store
+	@set -eu; \
+	command -v "$${OPENCODE_SBX_BIN:-sbx}" >/dev/null; \
+	mkdir -p /tmp/opencode; \
+	directory="$$(mktemp -d /tmp/opencode/sandbox-template.XXXXXX)"; \
+	trap 'rm -f "$$directory/template.tar"; rmdir "$$directory"' EXIT; \
+	docker image save $(SANDBOX_IMAGE_NAME) --output "$$directory/template.tar"; \
+	"$${OPENCODE_SBX_BIN:-sbx}" template load "$$directory/template.tar"
+
+update: ## Rebuild latest V2 (or OPENCODE_VERSION pin) without cache, then create local state dirs
 	OPENCODE_BUILD_NO_CACHE=1 IMAGE_NAME=$(IMAGE_NAME) bash scripts/build-image.sh
 	@$(MAKE) setup
 
@@ -42,10 +55,10 @@ run-native: ## Run with native profile
 run-sandbox: ## Run the sandbox backend with Docker Sandboxes
 	@bash bin/opencode-sandbox --profile native
 
-run-opencode2: ## Compatibility alias for the latest OpenCode container backend
+run-opencode2: ## Compatibility alias for the V2 container backend
 	@bash bin/opencode2-container --profile native
 
-run-opencode2-sandbox: ## Compatibility alias for the latest OpenCode sandbox backend
+run-opencode2-sandbox: ## Compatibility alias for the V2 sandbox backend
 	@bash bin/opencode2-sandbox --profile native
 
 run-sandbox-alpha: ## Run the separate pinned standalone V2 sandbox alpha
@@ -53,6 +66,16 @@ run-sandbox-alpha: ## Run the separate pinned standalone V2 sandbox alpha
 
 test-sandbox-alpha: ## Test standalone alpha configuration/ownership without a runtime
 	@python3 -B scripts/test-sandbox-alpha.py
+
+test: ## Test launcher routing, V2 guards, and standalone alpha without a runtime
+	@bash scripts/test-launcher.sh
+	@$(MAKE) test-sandbox-alpha
+
+test-runtime: ## Verify the built V2 image, permissions, persistence, and authenticated web lifecycle
+	@OPENCODE_TEST_IMAGE=$(IMAGE_NAME) bash scripts/test-runtime.sh
+
+test-sandbox-image: ## Verify the V2 template user, sudo, proxy preservation, and credential import
+	@OPENCODE_TEST_SANDBOX_IMAGE=$(SANDBOX_IMAGE_NAME) bash scripts/test-sandbox-image.sh
 
 shell-install-sandbox-alpha: ## Install only the alpha launcher; never overwrite user files
 	@mkdir -p "$(HOME)/.local/bin"
@@ -74,7 +97,7 @@ doctor: ## Check prerequisites
 	@echo "Checking prerequisites..."
 	@command -v docker >/dev/null 2>&1 && echo "✅ Docker is installed" || echo "❌ Docker is not installed"
 	@docker image inspect $(IMAGE_NAME) >/dev/null 2>&1 && echo "✅ Image $(IMAGE_NAME) is built" || echo "❌ Image $(IMAGE_NAME) is not built"
-	@if docker image inspect $(IMAGE_NAME) >/dev/null 2>&1; then version="$(docker run --rm --entrypoint opencode $(IMAGE_NAME) --version 2>/dev/null || true)"; [ -n "$version" ] && echo "✅ OpenCode image runtime: $version" || echo "⚠️ Could not read OpenCode version from image"; fi
+	@if docker image inspect $(IMAGE_NAME) >/dev/null 2>&1; then version="$$(docker run --rm --entrypoint opencode $(IMAGE_NAME) --version 2>/dev/null || true)"; case "$$version" in 'opencode v2.'*|2.*) echo "✅ OpenCode V2 image runtime: $$version" ;; *) echo "❌ Rebuild required: expected OpenCode V2, found $$version" ;; esac; fi
 	@[ -n "$$SSH_AUTH_SOCK" ] && [ -S "$$SSH_AUTH_SOCK" ] && echo "✅ SSH agent is running" || echo "⚠️ SSH agent is not running or socket not found"
 	@[ -d "$(OPENCODE_CONTAINER_HOME)" ] && echo "✅ Persistent directory exists" || echo "❌ Persistent directory does not exist"
 	@jev="$${OPENCODE_JEV_PLUGIN_DIR-$$HOME/github/opencode-jev-compactor}"; \

@@ -18,12 +18,38 @@ The tone is practical on purpose: field notes, not framework worship. It is a st
 
 This repo includes a prompt injection / data exfiltration demo under `demo/`. It builds a fake lab repo with hidden instructions in common files (README HTML comments, code comments, `copilot-instructions.md`, TODO comments) and shows how agents can be tricked into exfiltrating environment data, and how containment blocks host secrets even when the model follows the instructions. See `demo/README.md` for setup and walkthrough.
 
+## OpenCode V2 only
+
+All main backends require OpenCode **V2**, supplied by a versioned upstream
+image. Scripted builds select the latest stable V2 release unless explicitly
+pinned. V1 is not installed or selected by either backend. The old
+`opencode2-*` names remain aliases to the same V2 launchers.
+
+After updating this checkout, run `make build`, then
+`opencode-container --version`. The TUI defaults to `--standalone`, so its
+private server does not write service configuration into the read-only host
+config. For server-backed subcommands, pass that flag explicitly, for example
+`opencode-container auth list --standalone`. Explicit `--server` connections
+remain supported.
+
+Existing named sandboxes retain their old image. V1 sandboxes fail with an
+actionable error; they are never deleted or upgraded in place. Preserve their
+data, build and load the V2 sandbox template, then use a new name such as
+`opencode-sandbox --name my-project-v2`.
+
+V2 has different plugin and server APIs. Local plugins must implement the V2
+plugin API. The web command is `opencode serve`, readiness checks use
+`/api/info`, and the Basic Auth username is always `opencode`. For an existing
+launcher credential file, stop the old server and change only its username line
+to `OPENCODE_SERVER_USERNAME=opencode`; preserve its password and mode `0600`.
+Back up isolated state with clients stopped before migrating it. Updating this
+checkout does not change host configuration or restart live services.
+
 ## Standalone Sandboxes alpha
 
 The standalone alpha is available on `main`. This opt-in path
-is separate from the existing latest-runtime container/sandbox and Jev workflows;
-those launchers, image, and host integrations are unchanged. Only this alpha
-uses the pinned V2 artifact below. It does not mount a host Jev checkout or
+is separate from the main V2 container/sandbox and Jev workflows. The alpha
+retains its own older pinned V2 artifact below. It does not mount a host Jev checkout or
 inherit its configuration/auth automatically.
 
 Public **alpha**, not a production-ready or multi-harness release. Live-tested
@@ -86,8 +112,8 @@ opencode-sandbox-alpha -- --continue
 ```
 
 This is **not native host attach** and does not replace the legacy launchers.
-The default Sandboxes OpenCode image ships V1, so this path provisions its own
-matching V2. Its microVM has a writable root and guest sudo, not container
+This path provisions its own matching V2 in a pinned shell template rather than
+an upstream agent image. Its microVM has a writable root and guest sudo, not container
 hardening parity. Name-based runtime operations cannot prevent external
 replacement races; resource UUID checks and a per-workspace lock detect ordinary
 collisions/replacement. Fixed SSH-agent forwarding and clipboard sharing are
@@ -137,11 +163,11 @@ note what worked and where setup or daily use felt awkward.
 
 That is the normal path. The workspace is your current project directory, mounted read-write at `/workspace`; host config mounts stay read-only, and OpenCode auth is copied into isolated container state.
 
-OpenCode comes directly from `ghcr.io/anomalyco/opencode:latest`. The image does
-not install a second pinned preview CLI (the standalone alpha downloads its
-own pinned binary separately, not into this image). The historical `opencode2-*` command
-names remain compatibility aliases, but they execute the same latest `opencode`
-binary and share the same state/runtime semantics.
+OpenCode V2 comes directly from an exact `ghcr.io/anomalyco/opencode:2.x.y`
+tag resolved at build time, never the ambiguous `latest` upstream tag. The image
+contains one `opencode` runtime;
+`opencode2-*` names are compatibility aliases to it. The standalone alpha
+downloads its own pinned V2 binary separately.
 
 Useful follow-ups:
 
@@ -156,8 +182,8 @@ make sync-config # force-refresh isolated OpenCode cache/state
 You can also pass OpenCode subcommands directly through the launcher:
 
 ```bash
-opencode-container auth ls
-opencode-container models --refresh
+opencode-container auth list --standalone
+opencode-container models --standalone
 ```
 
 Start a Docker-only local web server with persistent Basic Auth credentials:
@@ -174,7 +200,7 @@ opencode-container --web-server stop --web-port 4097
 ```
 
 The legacy `opencode2-container --web-server` command is only a compatibility
-alias to the same latest OpenCode web runtime. It uses the same state, health
+alias to the same V2 OpenCode web runtime. It uses the same state, health
 endpoint, credentials, and lifecycle behavior as `opencode-container`.
 
 The server is published only on `127.0.0.1`. The launcher requires Docker
@@ -211,8 +237,8 @@ port to the LAN. Containers explicitly attached to that network and Docker
 daemon administrators remain trusted.
 
 For this entrypoint-independent launch path, a custom `OPENCODE_IMAGE` must
-provide `/bin/sh` and the `opencode` executable. A custom image used with
-`opencode2-container` must additionally provide `opencode2`.
+provide `/bin/sh` and an OpenCode V2 `opencode` executable. No separate
+`opencode2` binary is required, including for compatibility aliases.
 
 For running the web server as a **systemd service** (auto-start, restart,
 status) and for **attaching a TUI** to a running web server (including the
@@ -268,7 +294,12 @@ opencode-container --sync-config
 make sync-config
 ```
 
-Host OpenCode data is resolved from `OPENCODE_HOST_STATE_DIR` or `XDG_DATA_HOME` and auth is mirrored into isolated container state automatically, so providers you have already logged into on the host should appear inside `make run` without extra setup. The host database is copied only during first-time container state initialization so container-created sessions remain resumable with `opencode-container -s <session-id>`.
+Host OpenCode data is resolved from `OPENCODE_HOST_STATE_DIR` or `XDG_DATA_HOME`.
+The V2 database, including credentials, seeds isolated container state only on
+first initialization, so existing host sign-ins are initially available and
+container sessions remain resumable with `opencode-container -s <session-id>`.
+Later host credential changes do not replace the isolated database; use
+`opencode-container auth login --standalone` to update the container identity.
 
 If you are behind a proxy or need an internal CA bundle, set the standard proxy variables in your shell or `opencode-local.sh` before `make build` / `make run`. They are only passed through when explicitly set.
 
@@ -285,7 +316,7 @@ If you are behind a proxy or need an internal CA bundle, set the standard proxy 
 | `sandbox` | `bin/opencode-sandbox` | stronger isolation, cleaner runtime boundary | fewer host-level customization knobs |
 
 Legacy `opencode2-container` and `opencode2-sandbox` names remain available
-for compatibility, but they are aliases to the same latest OpenCode runtime.
+for compatibility, but they are aliases to the same V2 OpenCode runtime.
 
 Default profiles differ between the two launchers. `bin/opencode-container` defaults to the `secure` profile when run directly. `bin/opencode-sandbox` defaults to the `native` profile when run directly. The Makefile targets (`make run`, `make run-native`, `make run-sandbox`) pass `--profile native` explicitly.
 
@@ -317,7 +348,32 @@ OPENCODE_SANDBOX_CPUS=4
 
 Sandbox auto-naming: when `OPENCODE_SANDBOX_NAME` is not set, the launcher names the sandbox `opencode-<sanitized-basename>` where the workspace basename is lowercased and any characters other than alphanumerics, `.`, `+`, and `-` are replaced with `-`.
 
-Host auth mirror: host OpenCode auth is copied into a sandbox-specific read-only auth mirror (`$OPENCODE_SANDBOX_STATE_DIR/auth/auth.json`). On each launch a bootstrap script ensures the sandbox's `~/.local/share/opencode/auth.json` points to that mirror via a symlink. The mirror is refreshed from the host every launch; the symlink only recreates itself when needed.
+The sandbox uses a separate V2 image target,
+`localhost/opencode-containment-sandbox:latest`, with the `agent` user and
+passwordless sudo required by `sbx`. The container image does not include these
+sandbox-only additions. Both targets use the same V2 version-selection policy.
+
+`sbx` does **not** share the host Docker image store. Build and import the
+template before creating a sandbox:
+
+```bash
+make build-sandbox
+make load-sandbox-template  # requires sbx installed and signed in
+opencode-sandbox --name my-project-v2
+```
+
+`--template` / `OPENCODE_SANDBOX_TEMPLATE` can select another imported or
+registry-accessible V2 template. Override `SANDBOX_IMAGE_NAME` for both Makefile
+commands when building a custom tag, then use that tag with `--template`.
+Reused V1 sandboxes are rejected without deleting state.
+
+When host auth sync is enabled and a host V2 CLI is installed, `auth export`
+writes a private mirror at `$OPENCODE_SANDBOX_STATE_DIR/auth/credentials.json`.
+The sandbox mounts it read-only and uses V2 `auth import --standalone` to add
+credentials to its own database. Existing credential IDs and guest selections
+are preserved, not refreshed or overwritten. Host token rotation may require
+signing in again inside the sandbox. Set `OPENCODE_SYNC_HOST_AUTH=0` for fully
+independent guest credentials; no host database is mounted or copied.
 
 Default network allowlist: the committed `config/sbx-network-allow.txt` only includes Ollama Cloud domains. If you use another model or provider API, add its domains narrowly (for example `api.example.com:443`) and run `make setup-sandbox-policy` before launching the sandbox.
 
@@ -350,7 +406,7 @@ Both backends are designed with security as a primary concern. See [SECURITY_REP
 - **Hardening**: The `container` backend uses explicit container hardening (`--cap-drop=ALL`, `--security-opt no-new-privileges`, `--read-only`, `--tmpfs /tmp`, `--init`); the `sandbox` backend delegates isolation to `sbx` and its microVM runtime.
 - **Filesystem Containment**: The `container` backend uses a read-only root with explicit writable paths. The `sandbox` backend relies on `sbx` to manage sandbox state and isolation.
 - **Workspace Guardrails**: The launcher rejects unsafe workspace mounts (`/`, `$HOME`, or paths outside the starting directory tree).
-- **OpenCode Auth**: Host OpenCode login state is copied into the container's isolated persistent state before launch. This preserves provider visibility without mounting the entire host home directory.
+- **OpenCode Auth**: The host V2 database seeds new container state once; sandbox credential export/import uses a private mirror. Runtime state remains isolated without mounting the host home directory.
 - **OpenCode Plugins**: Plugin declarations are visible via the read-only config mount, but plugin code from arbitrary host paths is not available inside the container unless you add a narrow read-only mount in `opencode-local.sh`. Plugins execute with the workspace and mirrored auth available, so only run plugin sources you trust.
 
 ### Security Non-Negotiables
@@ -391,6 +447,7 @@ You can customize the environment with environment variables or a local override
 
 - `OPENCODE_PROFILE`: Override the runtime mode (`secure` or `native`). The recommended daily workflow is `make run`, which uses `native`.
 - `OPENCODE_IMAGE`: Override the default Docker image.
+- `OPENCODE_VERSION`: Build the latest stable V2 release (default `latest`), or pin an exact `2.x.y` upstream release. Other versions/tags are rejected.
 - `OPENCODE_WORKSPACE`: Override the workspace directory to mount.
 - `OPENCODE_WEB_PORT`: Port for `opencode-container --web-server` (default: `4096`; overridden by `--web-port`). Starts publish only to `127.0.0.1` unless the explicit `--network-accessible` flag is supplied; credentials are scoped to its workspace-and-port container name under `$OPENCODE_CONTAINER_HOME/web-server/`.
 - `OPENCODE_OVERRIDES_FILE`: Optional JSON file to pass as `OPENCODE_CONFIG_CONTENT`.
@@ -426,7 +483,7 @@ cache and state are copied into `OPENCODE_CONTAINER_HOME`; no writable host
 OpenCode data, cache, or runtime-state directory is mounted.
 
 - **Config (`XDG_CONFIG_HOME`)**: mounted read-only and shared with the host.
-- **Data (`XDG_DATA_HOME`)**: `auth.json`, `account.json`, and `mcp-auth.json` refresh each launch; `opencode.db` and its WAL/SHM seed only when the container database is absent.
+- **Data (`XDG_DATA_HOME`)**: `opencode.db` and its WAL/SHM seed only when the container database is absent. V2 credentials live in this database. Historical JSON auth files, when present, are also copied for runtime-managed import; they are not the V2 credential store.
 - **Cache (`XDG_CACHE_HOME`)**: `packages/`, `models.json`, `opencode-quota/`, and `quota-provider-state/` seed first-init only. `packages/` can be large, so it is copied only on first init or an explicit refresh.
 - **State (`XDG_STATE_HOME`)**: `model.json`, `kv.json`, and `plugin-meta.json` seed first-init only. Metadata paths for config, data, cache, and state are rewritten for `/home/opencode`; locks, prompt history, frecency, and TUI state are not copied.
 
@@ -435,9 +492,9 @@ the selected cache/state copies, then exits before workspace and Docker checks.
 It never overwrites the isolated `opencode.db`. Set
 `OPENCODE_SYNC_CONFIG_CACHE=0` or `OPENCODE_SYNC_CONFIG_STATE=0` to opt out.
 
-For the sandbox backend, config and data defaults honor `XDG_CONFIG_HOME` and
-`XDG_DATA_HOME`; host config is mounted read-only and host auth is copied into a
-sandbox-specific read-only auth mirror. Host cache and runtime state are not
+For the sandbox backend, config and support-file defaults honor `XDG_CONFIG_HOME`
+and `XDG_DATA_HOME`; host config is mounted read-only and V2 credentials use a
+sandbox-specific private export/import mirror. Host cache and runtime state are not
 shared. Sandbox sessions and `opencode.db` remain sandbox-local, so native,
 container, and sandbox usage do not overwrite each other's session databases.
 
@@ -471,14 +528,15 @@ Example OpenCode configuration:
 
 ```jsonc
 {
-  "plugin": [
-    [
-      "file:///home/christian/github/opencode-jev-compactor/dist/index.js",
-      {
+  "$schema": "https://opencode.ai/config.json",
+  "plugins": [
+    {
+      "package": "file:///home/christian/github/opencode-jev-compactor/dist/index.js",
+      "options": {
         "enabled": true,
         "delivery": "observe"
       }
-    ]
+    }
   ]
 }
 ```
@@ -495,7 +553,7 @@ DOCKER_ARGS+=(--volume "$HOME/github/my-plugin:$HOME/github/my-plugin:ro,Z")
 Plugins execute inside the OpenCode process with access to the mounted
 workspace and mirrored provider auth, so treat plugin code as trusted.
 
-### Local Override Hook### Local Override Hook
+### Local Override Hook
 
 For local customization, copy the tracked example file and keep your personal changes in `opencode-local.sh`:
 
@@ -528,15 +586,34 @@ support `--with-tool`.
 
 ### Build and Version Strategy
 
-The committed defaults favor freshness over bit-for-bit reproducibility:
+Build helpers select the latest stable OpenCode V2 release; other tool defaults
+also favor freshness:
 
-- OpenCode base image: `ghcr.io/anomalyco/opencode:latest`
+- OpenCode base image: `ghcr.io/anomalyco/opencode:2.x.y`, resolved from the official release API before each scripted build
 - Rust: `stable`
 - `uv`: latest installer
 - `marksman`: latest GitHub release
 - Alpine packages: current packages available from the base image repositories at build time
 
-For most personal use, run `make update` periodically. It pulls the latest base image, rebuilds without cache, refreshes package-manager installs, and preserves existing container state.
+Run `make update` periodically to select the latest stable V2 release, refresh
+packages, and rebuild without cache while preserving runtime state. `make build`
+and `make build-sandbox` use the same version selection with build caching.
+The helper requires host `curl` for `latest`, prints the resolved version, and
+passes that exact tag to the build. Lookup failures, non-V2 releases, and
+prereleases fail the build rather than silently falling back. If the matching
+image has not been published yet, retry later or pin a known release.
+
+To pin a release, set `export OPENCODE_VERSION="2.x.y"` in `opencode-local.sh`.
+Remove the pin or set it to `latest` to resume floating builds. An explicit pin
+does not need the release API. Direct `docker build` / `podman build` invocations
+bypass the helper and retain the Dockerfile's `2.1.1` fallback unless given a
+version build argument. The image build also verifies that its runtime is V2.
+
+The TUI updater does not rebuild images. After a successful build, exit and
+relaunch interactive containers. For a systemd deployment, finish running tasks
+and close clients before explicitly restarting the container service. Neither
+`make build` nor `make update` restarts it. Existing named sandboxes and the
+separately pinned standalone alpha are not upgraded by these commands.
 
 For reproducible or audited builds, pin versions locally in `opencode-local.sh` before running `make build`:
 
@@ -555,10 +632,10 @@ To add personal packages without committing Dockerfile changes, set `OPENCODE_BU
 
 ## What's in the Container
 
-The image is built on the OpenCode base image (`ghcr.io/anomalyco/opencode:latest`, Alpine-based) and adds:
+The image is built on a versioned, Alpine-based OpenCode V2 image and adds:
 
 - OpenCode CLI, neovim (with a prepared tree-sitter parser directory), marksman (Markdown LSP)
-- One OpenCode CLI supplied by `ghcr.io/anomalyco/opencode:latest`
+- One OpenCode V2 CLI supplied by the versioned upstream image
 - Rust toolchain (stable), `uv` (Python package manager), Python 3, Node.js, npm
 - Git, GitHub CLI, git-crypt, sops, openssh-client
 - Shell tools: bash, zsh, ripgrep, fd, fzf, bat, eza, zoxide, direnv
@@ -584,6 +661,8 @@ SECURITY_REPORT.md         security threat model and mitigations
 ## Makefile Targets
 
 - `make build`: Build the Docker image
+- `make build-sandbox`: Build the V2 sandbox template with its required guest user and sudo
+- `make load-sandbox-template`: Import the built template into the separate `sbx` image store
 - `make update`: Pull the base image and rebuild without Docker cache
 - `make setup`: Create necessary persistent directories
 - `make setup-jev`: Install dependencies, typecheck, build, and test the trusted local Jev compaction checkout
@@ -594,22 +673,26 @@ SECURITY_REPORT.md         security threat model and mitigations
 - `make run-native`: Run the container interactively (native profile)
 - `make run-secure`: Run the container with the secure profile
 - `make run-sandbox`: Run the `sandbox` backend
-- `make run-opencode2`: Compatibility alias for the latest OpenCode container backend
-- `make run-opencode2-sandbox`: Compatibility alias for the latest OpenCode sandbox backend
+- `make run-opencode2`: Compatibility alias for the V2 container backend
+- `make run-opencode2-sandbox`: Compatibility alias for the V2 sandbox backend
 - `make sync-config`: Force-refresh OpenCode cache/state from host into container persistent state without launching a container
+- `make test`: Run launcher regression tests and standalone alpha tests without a runtime
+- `make test-runtime`: Verify the built V2 image, native permissions, session persistence, and web authentication/lifecycle against disposable state
+- `make test-sandbox-image`: Verify V2, the guest user/sudo/proxy contract, and native credential import/export in the sandbox image (not a live microVM test)
 - `make clean-sandbox-smoke`: Remove a sandbox named `opencode-containment-smoke` (a convention used for manual sandbox smoke testing; no Makefile target auto-creates it)
 - `make shell-install`: Install primary launchers and legacy compatibility aliases to `~/.local/bin`
 - `make clean`: Remove generated files and persistent state
 
 ## Prerequisites
 
-- Docker, bash, `make`
+- Docker, bash, `make`, and `curl` (for latest-release lookup unless OpenCode is pinned)
 - Optional host tools: tmux (host-side, not in the container), neovim, VS Code, or any editor you prefer
 - The `sandbox` backend additionally requires `sbx` (Docker Sandboxes), KVM access, and `mkfs.ext4`/`mkfs.erofs` in your PATH
 
 ## Troubleshooting
 
-- **Image is stale or tools are outdated**: Run `make update` to pull the latest base image and rebuild without cache.
+- **V2 configuration rejected or V1 runtime detected**: Run `make build`, then `opencode-container --version`; it must report V2. Existing V1 sandboxes require a new name and the rebuilt V2 template; do not delete their data automatically.
+- **Image is stale or tools are outdated**: Run `make update` to select the latest stable V2 base (or your explicit pin) and rebuild without cache, then relaunch the container.
 - **Plugins or model state not showing up**: Run `make sync-config` to force-refresh host OpenCode cache/state into container persistent state.
 - **Plugin failed to load / missing module**: Verify the checkout is visible at the exact path used by the `file://` URL. The Jev checkout is mounted automatically when it exists at `$HOME/github/opencode-jev-compactor`; other local plugins need an explicit narrow read-only mount.
 - **Plugin loads on the host but not in the container**: Its `node_modules` may contain glibc-linked native modules from the host. Rebuild the plugin's dependencies for Alpine/musl, or install the published npm package instead of a local `file://` path.

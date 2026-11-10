@@ -1,6 +1,6 @@
-# Web Server and Remote Attach
+# V2 Web Server and Remote Clients
 
-The launcher's `--web-server` mode runs the latest `opencode web`
+The launcher's `--web-server` mode runs OpenCode V2 `opencode serve`
 inside a detached container with persistent Basic Auth credentials. Legacy
 `opencode2-container --web-server` commands are compatibility aliases to the
 same runtime, state, health endpoint, and credential behavior.
@@ -17,8 +17,8 @@ This doc covers two related patterns the launcher does not manage for you:
 
 ## systemd service
 
-The launcher's `--web-server` is a foreground command that blocks until you
-stop it. If you want the containerized web server to start at boot, restart on
+The launcher's `--web-server start` returns after authentication/readiness
+checks succeed. If you want the containerized web server to start at boot, restart on
 failure, and respond to `systemctl status`, wrap it in a user systemd unit.
 
 The unit below runs the `opencode-containment:latest` image directly with
@@ -67,7 +67,7 @@ ExecStart=/usr/bin/podman run --replace \
   -p 0.0.0.0:17096:17096 \
   --entrypoint /bin/sh \
   localhost/opencode-containment:latest \
-  -c 'exec opencode web --hostname 0.0.0.0 --port 17096'
+  -c 'exec opencode serve --hostname 0.0.0.0 --port 17096'
 
 ExecStop=/usr/bin/podman stop -t 10 opencode-web-container
 ExecStopPost=/usr/bin/podman rm -f opencode-web-container
@@ -84,6 +84,9 @@ Notes:
 
 - `--replace` lets systemd restart the service cleanly; a stale container
   with the same name is removed on start.
+- Build the V2 image before installing this unit. An older unit that invokes
+  `opencode web` must be updated to `opencode serve`; the old command is not
+  available in V2. Drain sessions and close clients before restarting a service.
 - `:Z` relabeling is required on SELinux-Enforcing hosts. Omit it on
   non-SELinux systems if you hit label errors.
 - The host OpenCode config directory is mounted read-only so the container
@@ -99,8 +102,8 @@ Notes:
   `opencode-container --sync-config`) once before enabling the service so
   auth and cache are seeded.
 - `OPENCODE_SERVER_PASSWORD` is required for network exposure. Set a strong
-  password in the private environment file. The username defaults to `opencode`; override with
-  `OPENCODE_SERVER_USERNAME` if needed.
+  password in the private environment file. V2 fixes the Basic Auth username to
+  `opencode`; `OPENCODE_SERVER_USERNAME` cannot override it.
 - The service is a **user** unit. Enable lingering (`loginctl enable-linger
   $USER`) if you want it to start at boot before you log in.
 
@@ -114,23 +117,23 @@ systemctl --user restart  opencode-web-container
 journalctl --user -u opencode-web-container -f
 ```
 
-## Attaching a TUI to a running web server
+## Connecting a V2 TUI to a running server
 
-Use the **host** `opencode` binary to attach a local TUI to the running web
+Use the **host V2** `opencode` binary to connect a local TUI to the running web
 server. Do not use `opencode-container` for the attach step: the launcher
 starts a new container and runs `opencode` inside it, which is not the same as
 attaching your local TUI to a remote server.
 
 ```bash
-opencode attach http://192.168.0.200:17096 --dir /workspace/percolate
+OPENCODE_PASSWORD='<server-password>' opencode --server http://192.168.0.200:17096 /workspace/percolate
 ```
 
 ### Path translation
 
 The container mounts your workspace at `/workspace`, not at the host path.
-Inside the container, `opencode web` only sees `/workspace/<project>`. When
-you attach from the host, `--dir` is sent to the server verbatim, so you must
-use the **container path**:
+Inside the container, `opencode serve` only sees `/workspace/<project>`. When
+you connect from the host, select a directory that exists on the server, using
+the **container path**:
 
 | Host path | Container path |
 |-----------|----------------|
@@ -138,21 +141,21 @@ use the **container path**:
 | `~/github/opencode-containment` | `/workspace/opencode-containment` |
 
 `~` expands on the **client** (host) side to `/home/$USER/...`, which the
-container cannot see. Use `/workspace/...` for any `--dir` value sent to a
+container cannot see. Use `/workspace/...` for a directory sent to a
 containerized server.
 
 ### HTTP, not HTTPS
 
-`opencode web` serves plain HTTP. Use `http://`, not `https://`. If you need
+`opencode serve` serves plain HTTP. Use `http://`, not `https://`. If you need
 TLS, put a reverse proxy (Caddy, nginx, etc.) in front of the container port.
 
 ### Native (non-container) server
 
-If you also run a native `opencode web` on the host (no container), use the
+If you also run a native V2 server on the host (no container), use the
 host path and the native port:
 
 ```bash
-opencode attach http://192.168.0.50:7096 --dir ~/github/percolate
+OPENCODE_PASSWORD='<server-password>' opencode --server http://192.168.0.50:7096 ~/github/percolate
 ```
 
 The native server sees host paths directly, so `~/github/...` works there.

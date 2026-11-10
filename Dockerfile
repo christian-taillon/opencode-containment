@@ -1,7 +1,11 @@
-# Base image: Alpine Linux-based OpenCode. Defaults intentionally follow latest.
-FROM ghcr.io/anomalyco/opencode:latest
+# Never use the upstream `latest` tag: it can still select OpenCode V1.
+ARG OPENCODE_VERSION=2.1.1
+FROM ghcr.io/anomalyco/opencode:${OPENCODE_VERSION} AS tools
 
 USER root
+
+RUN version="$(opencode --version)" \
+    && case "$version" in 'opencode v2.'*|2.*) ;; *) echo "OpenCode V2 is required: $version" >&2; exit 1 ;; esac
 
 # OCI Labels
 LABEL org.opencontainers.image.title="opencode-containment"
@@ -142,7 +146,7 @@ RUN set -eu; \
     fi; \
     chmod +x /usr/local/bin/marksman
 
-# OpenCode is provided by the rolling latest base image above. Keep a single
+# OpenCode V2 is provided by the versioned base image above. Keep a single
 # runtime so plugins and the CLI share the same public API surface.
 
 # Install nvim wrapper to ensure runtimepath is set correctly
@@ -159,3 +163,21 @@ COPY scripts/container-init.sh /usr/local/bin/entrypoint.sh
 RUN chmod +x /usr/local/bin/entrypoint.sh
 
 ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]
+
+# sbx templates have a different user/privilege contract from hardened containers.
+FROM tools AS sandbox
+RUN apk add --no-cache sudo \
+    && adduser -D -u 1000 -s /bin/bash agent \
+    && mkdir -p /home/agent/workspace \
+    && chown -R agent:agent /home/agent \
+    && printf 'agent ALL=(ALL) NOPASSWD: ALL\nDefaults env_keep += "HTTP_PROXY HTTPS_PROXY NO_PROXY ALL_PROXY http_proxy https_proxy no_proxy all_proxy"\n' > /etc/sudoers.d/agent \
+    && chmod 0440 /etc/sudoers.d/agent
+USER agent
+ENV HOME=/home/agent
+WORKDIR /home/agent/workspace
+ENTRYPOINT []
+CMD ["opencode", "--standalone"]
+
+# Default image has no sandbox-only sudo or agent account.
+FROM tools AS container
+CMD ["opencode", "--standalone"]

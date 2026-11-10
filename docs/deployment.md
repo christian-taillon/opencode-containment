@@ -1,17 +1,22 @@
 # Deployment Notes — opencode-web-container
 
-This documents the actual running deployment of the containerized OpenCode
-web server on this host. For the general systemd pattern and TUI attach
+This records the host deployment layout and its required V2 server command.
+It is not evidence that a service is currently running: the documented user
+unit is not installed/active in the current validation environment. The V2
+migration does not install or restart it. Verify the deployed unit and drain
+sessions/close clients before an authorized rollout.
+
+For the general systemd pattern and V2 client connection
 workflow, see [web-server.md](web-server.md).
 
-## What's running
+## V2 deployment target
 
 | Field | Value |
 |-------|-------|
 | Service | `opencode-web-container.service` (user systemd unit) |
 | Image | `localhost/opencode-containment:latest` (locally built) |
 | Port | `0.0.0.0:17096` (LAN-accessible) |
-| Entrypoint | `opencode web --hostname 0.0.0.0 --port 17096` |
+| Entrypoint | `opencode serve --hostname 0.0.0.0 --port 17096` |
 | Restart policy | `on-failure` (5s delay) |
 
 ```bash
@@ -25,7 +30,11 @@ The image is built from `~/github/opencode-containment/Dockerfile` and tagged
 as `localhost/opencode-containment:latest`. It is **not** available from any
 registry — it must be built locally.
 
-Base: `ghcr.io/anomalyco/opencode:latest` (Alpine). The Dockerfile layers on:
+Direct Dockerfile builds default to `ghcr.io/anomalyco/opencode:2.1.1` (Alpine,
+OpenCode V2 only). The build helper instead resolves the latest stable V2 by
+default, or uses an explicit `OPENCODE_VERSION=2.x.y` pin from the environment
+or `opencode-local.sh`.
+The Dockerfile layers on:
 
 - Rust toolchain (stable), `uv`, Python 3, Node.js, npm
 - neovim (with tree-sitter parser dir), marksman (Markdown LSP)
@@ -38,12 +47,18 @@ Base: `ghcr.io/anomalyco/opencode:latest` (Alpine). The Dockerfile layers on:
 ```bash
 cd ~/github/opencode-containment
 podman build --pull -t localhost/opencode-containment:latest .
-# or via the build script:
-# ./scripts/build-image.sh
+# For latest V2 via the Docker-compatible CLI (must use the service's image store):
+# make update IMAGE_NAME=localhost/opencode-containment:latest
 ```
+
+Older installed units that invoke `opencode web` must be changed to
+`opencode serve`. Rebuild and verify V2 before restarting them; updating the
+checkout alone does not migrate a live service.
 
 The build script (`scripts/build-image.sh`) sources `opencode-local.sh` if it
 exists, which can set proxy vars, pin versions, or add extra APK packages.
+It requires host `curl` for latest-release lookup. Rebuilding does not restart
+the service; finish running tasks and close clients before an authorized restart.
 
 ### Recovery after `podman system reset`
 
@@ -128,9 +143,11 @@ Container OpenCode state is isolated from host OpenCode state:
 ```
 
 Run `make sync-config` (or `opencode-container --sync-config`) from the
-`opencode-containment` repo to seed auth and cache from host OpenCode into
-the container state directories. This only needs to be done once before
-first start, or when host auth changes.
+`opencode-containment` repo to seed new state and refresh selected cache/state
+files. V2 credentials are in `opencode.db`, which seeds only when the isolated
+database is absent and is never replaced by a refresh. Later host sign-in
+changes do not update that database; use
+`opencode-container auth login --standalone` to update container credentials.
 
 ## Connecting
 
@@ -139,15 +156,15 @@ first start, or when host auth changes.
 Browse to `http://<host-lan-ip>:17096` (or `http://localhost:17096`).
 
 HTTP Basic Auth:
-- Username: `opencode` (default)
+- Username: `opencode` (fixed by V2)
 - Password: value of `OPENCODE_SERVER_PASSWORD` from the env file
 
-### TUI attach
+### V2 TUI connection
 
 From the host, use the **host** `opencode` binary (not the launcher):
 
 ```bash
-opencode attach http://<host-lan-ip>:17096 --dir /workspace/<project>
+OPENCODE_PASSWORD='<server-password>' opencode --server http://<host-lan-ip>:17096 /workspace/<project>
 ```
 
 Use the **container path** (`/workspace/<project>`), not the host path

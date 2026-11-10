@@ -301,18 +301,15 @@ if [[ -f "$LOCAL_HOOK" ]]; then
     source "$LOCAL_HOOK"
 fi
 
-# Legacy opencode2-* wrapper names remain as compatibility aliases, but every
-# launcher now executes the single OpenCode runtime supplied by
-# ghcr.io/anomalyco/opencode:latest.
+# Legacy opencode2-* names are aliases to the same V2-only runtime.
 LAUNCHER_COMMAND="opencode-container"
 if [[ "${1:-}" == "--__opencode2" ]]; then
     LAUNCHER_COMMAND="opencode2-container"
     shift
 fi
-LAUNCHER_MODE="stable"
 OPENCODE_EXECUTABLE="opencode"
 WEB_NAME_PREFIX="opencode-web-"
-WEB_HEALTH_PATH="/global/health"
+WEB_HEALTH_PATH="/api/info"
 OPENCODE_CONTAINER_HOME="${OPENCODE_CONTAINER_HOME:-$HOME/.local/share/opencode-container}"
 
 # Default values (env-overridable)
@@ -378,7 +375,7 @@ Options:
 
 Behavior:
   Without '--', arguments are passed to '$OPENCODE_EXECUTABLE'.
-     Example: $LAUNCHER_COMMAND auth ls
+     Example: $LAUNCHER_COMMAND auth list --standalone
   With '--', arguments are executed as a raw container command.
     Example: $LAUNCHER_COMMAND -- bash
   --with-tool resolves bare names through the host shell's external-command PATH,
@@ -391,7 +388,9 @@ Behavior:
   --web-server cannot be combined with --with-tool, OpenCode, or raw command arguments.
 
 Runtime:
-  This launcher uses '$OPENCODE_EXECUTABLE' from the latest OpenCode image.
+  This launcher uses OpenCode V2 ('$OPENCODE_EXECUTABLE') from the containment image.
+  The TUI defaults to --standalone to keep host configuration read-only.
+  Pass --standalone explicitly for server-backed subcommands.
   Legacy opencode2-* names are compatibility aliases to this same runtime.
 
 Profiles:
@@ -747,7 +746,11 @@ read_web_credentials() {
     fi
     # The fixed format includes both required trailing newlines.
     size="$(stat_file_size "$WEB_CREDENTIALS_FILE")" || return 1
-    expected_size=141
+    expected_size=124
+    if [[ "$size" == 141 ]]; then
+        echo "Error: V2 requires OPENCODE_SERVER_USERNAME=opencode. Stop the old server, then update that line in $WEB_CREDENTIALS_FILE, preserving the password and mode 0600." >&2
+        return 1
+    fi
     if [[ "$size" != "$expected_size" ]]; then
         echo "Error: Web server credentials file is malformed: $WEB_CREDENTIALS_FILE" >&2
         return 1
@@ -767,7 +770,7 @@ read_web_credentials() {
     fi
     exec 3<&-
 
-    if ! [[ "$username_line" =~ ^OPENCODE_SERVER_USERNAME=(opencode-[0-9a-f]{16})$ ]]; then
+    if [[ "$username_line" != "OPENCODE_SERVER_USERNAME=opencode" ]]; then
         echo "Error: Web server credentials file is malformed: $WEB_CREDENTIALS_FILE" >&2
         return 1
     fi
@@ -811,10 +814,9 @@ create_web_credentials() {
         return
     fi
 
-    username="opencode-$(od -An -N 8 -tx1 /dev/urandom | tr -d ' \n')"
+    username="opencode"
     password="$(od -An -N 32 -tx1 /dev/urandom | tr -d ' \n')"
-    if ! [[ "$username" == "opencode" || "$username" =~ ^opencode-[0-9a-f]{16}$ ]] \
-        || ! [[ "$password" =~ ^[0-9a-f]{64}$ ]]; then
+    if ! [[ "$password" =~ ^[0-9a-f]{64}$ ]]; then
         echo "Error: Could not generate web server credentials." >&2
         return 1
     fi
@@ -1516,7 +1518,6 @@ if [[ "$WEB_SERVER" == "1" ]]; then
         --publish "${WEB_BIND_ADDRESS}:${WEB_PORT}:${WEB_PORT}"
         --volume "$WEB_CREDENTIALS_FILE:/tmp/opencode-web-credentials:$RO_MOUNT_OPTS"
         --volume "$WEB_ENTRYPOINT:/tmp/opencode-web-entrypoint:$RO_MOUNT_OPTS"
-        --env "OPENCODE_WEB_VARIANT=stable"
         --network "$WEB_NETWORK_NAME"
         # Override the image entrypoint so custom or stale images cannot skip
         # credential loading; /bin/sh executes the mounted wrapper below.
@@ -1544,8 +1545,13 @@ if [[ "$WEB_SERVER" == "1" ]]; then
     exit 0
 fi
 
+if [[ "$RAW_COMMAND" == "0" ]]; then
+    source "$SCRIPT_DIR/scripts/opencode-command.sh"
+    prepare_opencode_tui_args
+fi
+
 if [[ ${#ARGS[@]} -eq 0 ]]; then
-    ARGS=("$OPENCODE_EXECUTABLE")
+    ARGS=("$OPENCODE_EXECUTABLE" --standalone)
 elif [[ "$RAW_COMMAND" != "1" ]]; then
     ARGS=("$OPENCODE_EXECUTABLE" "${ARGS[@]}")
 fi

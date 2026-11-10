@@ -46,10 +46,34 @@ This project ships two backends rather than forcing one choice:
 
 Both backends share the same workspace guardrails (blocks `/`, `$HOME`, and out-of-tree mounts) and the same profile model (`secure` / `native`). Use `make run` for daily work; use `make run-sandbox` when you want stronger isolation or are running untrusted agent code.
 
-The image contains one OpenCode runtime supplied by
-`ghcr.io/anomalyco/opencode:latest`. Historical `opencode2-*` launcher names
+The image contains one OpenCode V2 runtime supplied by an exact
+`ghcr.io/anomalyco/opencode:2.x.y` tag. Scripted builds resolve the latest stable
+V2 from OpenCode's official HTTPS release API unless explicitly pinned. Lookup
+failure or an invalid/non-V2 version fails closed; an explicit pin bypasses the
+lookup. Direct Dockerfile builds retain a `2.1.1` fallback. The versioned base
+and build-time major-version check prevent an upstream `latest` tag from silently
+selecting V1. Floating builds trust new upstream releases; pin an exact version
+for controlled rollouts. Historical `opencode2-*` launcher names
 remain compatibility aliases only; they execute the same binary and use the
-same state/runtime semantics.
+same state/runtime semantics. The TUI uses a private V2 server by default so
+read-only host config does not need writable background-service settings.
+Existing V1 sandboxes fail closed, without deleting or modifying their database.
+V2 provider credentials live in the database. The sandbox's optional host
+credential sharing uses private V2 `auth export` / guest `auth import`, not
+an `auth.json` symlink. The export persists with directory mode `0700` and file
+mode `0600`, is mounted read-only, and is available to trusted guest tools.
+Imports preserve existing guest credential IDs and selections, so host token
+rotation is not automatically propagated. `OPENCODE_SYNC_HOST_AUTH=0` stops
+new imports; it does not erase previously imported credentials or private mirrors.
+The host database is never mounted into a sandbox.
+
+The separate Dockerfile `sandbox` target adds the `agent` UID-1000 user and
+passwordless sudo required by Docker Sandboxes, and does not print the hardened
+container banner. These additions are absent from the default `container`
+target. A sandbox guest has a writable root and can elevate to guest root;
+isolation relies on `sbx`'s microVM, not the container launcher's hardening.
+Locally built templates must be explicitly loaded into `sbx`'s separate image
+store. Updating a host Docker tag does not update an existing sandbox.
 
 ## Security Controls
 
@@ -67,7 +91,7 @@ same state/runtime semantics.
 | Per-launch host tool import | Active when requested | Selected external executables are copied into a private launcher-owned directory with fixed non-writable mode `0555`, mounted read-only at `/opt/opencode-tools`, and exposed through a fixed container PATH. Original host files are never mounted. |
 | Web-server listener | Guarded | Detached web servers are long-lived HTTP listeners with per-workspace/port Basic Auth credentials stored mode `0600`; loopback is the default bind and `--network-accessible` is an explicit LAN opt-in. |
 | Workspace guardrails | Active for mounts | Start/run rejects `/`, `$HOME`, and out-of-tree mounts. Lifecycle status/stop only addresses existing labeled Docker resources and can use the original canonical workspace path after deletion. |
-| Host config mounts | Read-only | `.gitconfig`, `.ssh/config`, `.ssh/known_hosts`, OpenCode config, GitHub CLI config |
+| Host config mounts | Read-only | `.gitconfig`, `.ssh/config`, `.ssh/known_hosts`, OpenCode config, GitHub CLI config. V2 TUI launches default to `--standalone`. |
 | SSH keys | Not mounted | SSH agent socket forwarded instead |
 | Docker socket | Not mounted | `/var/run/docker.sock` never exposed |
 | Seccomp | Active | Docker default seccomp profile filters syscalls |
@@ -109,7 +133,7 @@ same state/runtime semantics.
 | SSH agent forwarding | Accepted | Needed for normal Git/SSH workflows. |
 | GitHub auth/config access | Accepted | Needed for PR and repo workflows. |
 | Open internet access | Accepted | Needed for package installs, search, web fetch, and normal development. |
-| Mirrored OpenCode auth by default | Accepted | Keeps native, container, and sandbox usage simple without sharing private SSH keys. |
+| Initial container DB seed and optional sandbox credential import | Accepted | V2 credentials persist in isolated runtime databases. Sandbox host exports contain secrets and persist privately; disabling sync does not erase existing credentials. |
 | Persistent container state/cache | Accepted | Avoids repeated setup and re-login on every run. |
 | Persistent web-server credentials and listener | Accepted | Web servers are detached rather than `--rm`; credentials persist across restarts and `stop` preserves them. Treat the listener and its Basic Auth secret as sensitive until explicitly stopped. |
 | Optional LAN web-server exposure | Accepted with explicit opt-in | `--network-accessible` publishes HTTP Basic Auth to the LAN. Docker Engine 28+ is required for web-server starts because older Docker releases can expose even localhost-published ports to hosts on the same L2 network. |
@@ -136,8 +160,9 @@ same state/runtime semantics.
 ## Standalone Sandboxes alpha (separate opt-in path)
 
 `opencode-sandbox-alpha` is a week-one Linux x86_64 experiment using sbx v0.46.0
-and pinned OpenCode V2.0.22. Existing latest-runtime container/sandbox launchers,
-their Jev integration, and the deployed service remain unchanged. The alpha is
+and pinned OpenCode V2.0.22. It remains separate from the main V2 backends
+and their Jev integration. This project migration does not restart an installed
+service. The alpha is
 an in-sandbox UI, not a native host attach backend or automatic fallback.
 
 - Digest-pinned shell template and SHA-512-verified V2 artifact; no image rebuild.

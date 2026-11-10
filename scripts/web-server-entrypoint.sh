@@ -2,7 +2,6 @@
 set -eu
 
 credentials_file="/tmp/opencode-web-credentials"
-variant="${OPENCODE_WEB_VARIANT:-stable}"
 
 fail() {
     echo "Error: Web server credentials are malformed." >&2
@@ -29,14 +28,10 @@ case "$password_line" in
     *) fail ;;
 esac
 
-[ "$variant" = stable ] || fail
-[ "${#username}" -eq 25 ] || fail
-username_suffix=${username#opencode-}
-[ "$username_suffix" != "$username" ] || fail
-case "$username_suffix" in *[!0-9a-f]*) fail ;; esac
+[ "$username" = opencode ] || fail
 [ "${#password}" -eq 64 ] || fail
 case "$password" in ''|*[!0-9a-f]*) fail ;; esac
 
 export OPENCODE_SERVER_USERNAME="$username"
 export OPENCODE_SERVER_PASSWORD="$password"
-exec opencode web --hostname 0.0.0.0 --port "$1"
+exec opencode serve --hostname 0.0.0.0 --port "$1"

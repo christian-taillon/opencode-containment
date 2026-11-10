@@ -5,7 +5,7 @@
 # This file is gitignored - personal settings stay local.
 #
 # This script is sourced by bin/opencode-container and bin/opencode-sandbox.
-# Legacy opencode2-* wrappers are aliases to the same latest OpenCode runtime.
+# Legacy opencode2-* wrappers are aliases to the same V2-only OpenCode runtime.
 # You can set environment variables, modify DOCKER_ARGS for the container backend,
 # or set OPENCODE_CONFIG_CONTENT.
 #
@@ -44,8 +44,10 @@
 # export OPENCODE_BUILD_EXTRA_APK_PACKAGES="htop sqlite"
 
 # --- Optional Build Version Pins ---
-# Defaults intentionally follow latest/stable. Set these only when you want a
-# reproducible or audited local build.
+# Builds resolve latest stable V2 by default; set an exact 2.x.y to pin instead.
+# export OPENCODE_VERSION="latest"
+# Other tools follow latest/stable unless pinned here.
+# export OPENCODE_VERSION="2.1.1"
 # export RUST_TOOLCHAIN="1.88.0"
 # export UV_VERSION="0.11.25"
 # export UV_INSTALLER_SHA256="<installer-sha256>"
@@ -55,7 +57,7 @@
 
 # --- OpenCode Config Override (JSON) ---
 # Set this to pass custom config into the container:
-# export OPENCODE_CONFIG_CONTENT='{"agent":{}}'
+# export OPENCODE_CONFIG_CONTENT='{"agents":{}}'
 #
 # Or point to a JSON file (OPENCODE_CONFIG_CONTENT takes precedence):
 # export OPENCODE_OVERRIDES_FILE="$HOME/.config/opencode/overrides.json"
@@ -102,8 +104,10 @@
 # Host auth/account/MCP-auth files refresh before normal container launches. The
 # database seeds only when the container database is absent, preserving container
 # sessions. Cache packages can be large and, like selected runtime-state files,
-# seed only on first init or an explicit refresh. The sandbox mirrors auth only;
-# it does not share host cache/runtime state or seed opencode.db.
+# seed only on first init or an explicit refresh. V2 credentials live in the DB,
+# which is not replaced on later launches. The sandbox uses V2 auth export/import;
+# it does not share host cache/runtime state or seed opencode.db. Existing guest
+# credential IDs/selections are preserved rather than refreshed by imports.
 #
 # Disable it if you want a clean container identity:
 # export OPENCODE_SYNC_HOST_AUTH=0

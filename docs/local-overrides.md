@@ -17,6 +17,9 @@ Config mounts read-only. Data, cache, and runtime state are copied into
 `OPENCODE_CONTAINER_HOME`, never mounted writable from the host. `auth.json`,
 `account.json`, and `mcp-auth.json` refresh each normal launch; the session
 database seeds only when absent.
+V2 provider credentials live in that database, not the historical JSON files;
+later host sign-in changes do not refresh existing container credentials. Use
+`opencode-container auth login --standalone` for the isolated identity.
 Cache (`packages/` can be large) and selected runtime-state files seed only on
 first init or an explicit refresh.
 
@@ -48,12 +51,15 @@ the launcher exposes it read-only at the same absolute path inside the runtime.
 That allows a shared OpenCode config entry such as:
 
 ```jsonc
-"plugin": [
-  [
-    "file:///home/christian/github/opencode-jev-compactor/dist/index.js",
-    { "delivery": "observe" }
+{
+  "$schema": "https://opencode.ai/config.json",
+  "plugins": [
+    {
+      "package": "file:///home/christian/github/opencode-jev-compactor/dist/index.js",
+      "options": { "delivery": "observe" }
+    }
   ]
-]
+}
 ```
 
 Override the checkout path:
@@ -80,6 +86,8 @@ DOCKER_ARGS+=(--volume "$HOME/github/my-plugin:$HOME/github/my-plugin:ro,Z")
 ```
 
 The destination must exactly match the path in the plugin's `file://` URL.
+The plugin itself must implement the OpenCode V2 plugin API; changing config
+syntax does not migrate a V1 plugin implementation.
 Mount only plugin code you trust. Plugins execute inside the OpenCode process
 with access to the workspace and mirrored provider authentication.
 
@@ -90,7 +98,7 @@ checkouts require an explicit sandbox integration or a custom template.
 ## Standalone Sandboxes alpha
 
 This section applies only to the opt-in `opencode-sandbox-alpha` launcher, not
-the latest-runtime launchers described above. It does not source
+the main V2 launchers described above. It does not source
 `opencode-local.sh`, mirror host auth, or automatically mount the Jev checkout.
 
 `opencode-sandbox-alpha` does not source shell hooks. Containment precedence:

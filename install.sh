@@ -47,12 +47,12 @@ Install complete.
 Next steps:
   1) Start the container: make run
   2) Optional secure mode: make run-secure
-  3) Optional sandbox backend: make run-sandbox
-  4) Legacy opencode2-* command names remain compatibility aliases to the same latest OpenCode runtime
+  3) Optional sandbox backend: make build-sandbox load-sandbox-template, then make run-sandbox
+  4) All launchers use OpenCode V2; opencode2-* names remain aliases to it
   5) Optional Jev compaction plugin: make setup-jev
   6) Optional: copy opencode-local.example.sh to opencode-local.sh and customize
      - proxy / custom CA passthrough
      - local extra Alpine packages for builds
-  6) Optional CLI install: make shell-install
+  7) Optional CLI install: make shell-install
 
 EOF

@@ -3,6 +3,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 LAUNCHER="$SCRIPT_DIR/bin/opencode-container"
+SANDBOX_LAUNCHER="$SCRIPT_DIR/bin/opencode-sandbox"
 V2_CONTAINER_LAUNCHER="$SCRIPT_DIR/bin/opencode2-container"
 V2_CONTAINMENT_LAUNCHER="$SCRIPT_DIR/bin/opencode2-containment"
 V2_SANDBOX_LAUNCHER="$SCRIPT_DIR/bin/opencode2-sandbox"
@@ -129,6 +130,9 @@ case "${1:-}" in
     version)
         [[ "${2:-}" == "--format" ]] || exit 1
         printf '%s\n' "${DOCKER_SERVER_VERSION:-28.0.0}"
+        ;;
+    build)
+        printf '%s\n' "$@" > "$DOCKER_LOG"
         ;;
     container)
         if [[ "${2:-}" != "inspect" ]]; then
@@ -366,6 +370,12 @@ set -euo pipefail
 
 printf '%s\n' "$*" >> "$CURL_EVENTS"
 
+if [[ "${!#}" == "https://opencode.ai/update/api/latest/cli/npm" ]]; then
+    [[ "${CURL_RELEASE_FAIL:-0}" == "0" ]] || exit 22
+    printf '%s\n' "$CURL_RELEASE_METADATA"
+    exit 0
+fi
+
 auth_config=""
 for ((index = 1; index <= $#; index++)); do
     if [[ "${!index}" == "--config" ]]; then
@@ -416,6 +426,17 @@ case "${1:-}" in
         printf '%s\n' "$name" > "$SBX_STATE"
         ;;
     exec)
+        script="${!#}"
+        if [[ "$script" == set\ -eu* ]]; then
+            while [[ $# -gt 0 ]]; do
+                if [[ "$1" == -e ]]; then
+                    export "$2"
+                    shift
+                fi
+                shift
+            done
+            bash -c "$script"
+        fi
         ;;
     *)
         exit 1
@@ -423,6 +444,19 @@ case "${1:-}" in
 esac
 EOF
 chmod +x "$FAKE_BIN/sbx"
+
+cat > "$FAKE_BIN/opencode" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+printf 'opencode %s\n' "$*" >> "$SBX_LOG"
+case "$*" in
+    --version) printf '%s\n' "${OPENCODE_TEST_VERSION:-opencode v2.1.1}" ;;
+    'auth export') printf '[]\n' ;;
+    'auth import --standalone '*) exit 0 ;;
+    *) exit 1 ;;
+esac
+EOF
+chmod +x "$FAKE_BIN/opencode"
 
 run_launcher_with() {
     local launcher="$1"
@@ -475,6 +509,8 @@ run_launcher_from_with() {
             DOCKER_TOOL_STDIN_EXPECTED="${DOCKER_TOOL_STDIN_EXPECTED:-}" \
             HOME="$TEST_HOME" \
             OPENCODE_CONTAINER_HOME="$CONTAINER_HOME" \
+            OPENCODE_SANDBOX_STATE_DIR="$TEST_DIR/sandbox-home" \
+            OPENCODE_SYNC_HOST_AUTH="${OPENCODE_SYNC_HOST_AUTH:-0}" \
             "$launcher" "$@"
     )
 }
@@ -507,29 +543,39 @@ assert_no_temporary_web_files() {
     shopt -u nullglob
 }
 
-run_launcher auth ls > "$OUTPUT"
+run_launcher auth list --standalone > "$OUTPUT"
 mapfile -t docker_args < "$DOCKER_LOG"
-assert_command_tail opencode auth ls
+assert_command_tail opencode auth list --standalone
 
 reset_docker_artifacts
-run_launcher start > "$OUTPUT"
+run_launcher models --standalone > "$OUTPUT"
 mapfile -t docker_args < "$DOCKER_LOG"
-assert_command_tail opencode start
+assert_command_tail opencode models --standalone
+
+reset_docker_artifacts
+run_launcher > "$OUTPUT"
+mapfile -t docker_args < "$DOCKER_LOG"
+assert_command_tail opencode --standalone
+
+reset_docker_artifacts
+run_launcher --continue > "$OUTPUT"
+mapfile -t docker_args < "$DOCKER_LOG"
+assert_command_tail opencode --standalone --continue
 
 reset_docker_artifacts
 JEV_PLUGIN_TEST_DIR="$TEST_HOME/github/opencode-jev-compactor"
 mkdir -p "$JEV_PLUGIN_TEST_DIR"
-TYPESAFE_API_KEY="typesafe-test-key" run_launcher auth ls > "$OUTPUT"
+TYPESAFE_API_KEY="typesafe-test-key" run_launcher auth list --standalone > "$OUTPUT"
 mapfile -t docker_args < "$DOCKER_LOG"
 assert_arg_pair --env TYPESAFE_API_KEY=typesafe-test-key
 assert_arg_pair --volume "$JEV_PLUGIN_TEST_DIR:$JEV_PLUGIN_TEST_DIR:ro"
-assert_command_tail opencode auth ls
+assert_command_tail opencode auth list --standalone
 rm -rf "$JEV_PLUGIN_TEST_DIR"
 
 reset_docker_artifacts
-run_launcher_with "$V2_CONTAINER_LAUNCHER" auth ls > "$OUTPUT"
+run_launcher_with "$V2_CONTAINER_LAUNCHER" auth list --standalone > "$OUTPUT"
 mapfile -t docker_args < "$DOCKER_LOG"
-assert_command_tail opencode auth ls
+assert_command_tail opencode auth list --standalone
 
 reset_docker_artifacts
 run_launcher_with "$V2_CONTAINMENT_LAUNCHER" --version > "$OUTPUT"
@@ -540,6 +586,26 @@ reset_docker_artifacts
 run_launcher_with "$V2_CONTAINER_LAUNCHER" --server http://host.containers.internal:4096 > "$OUTPUT"
 mapfile -t docker_args < "$DOCKER_LOG"
 assert_command_tail opencode --server http://host.containers.internal:4096
+
+reset_docker_artifacts
+run_launcher --print-logs serve --port 4096 > "$OUTPUT"
+mapfile -t docker_args < "$DOCKER_LOG"
+assert_command_tail opencode --print-logs serve --port 4096
+
+reset_docker_artifacts
+run_launcher /workspace/project > "$OUTPUT"
+mapfile -t docker_args < "$DOCKER_LOG"
+assert_command_tail opencode --standalone /workspace/project
+
+reset_docker_artifacts
+run_launcher /workspace/project --server http://example.test:4096 > "$OUTPUT"
+mapfile -t docker_args < "$DOCKER_LOG"
+assert_command_tail opencode /workspace/project --server http://example.test:4096
+
+reset_docker_artifacts
+run_launcher --prompt serve > "$OUTPUT"
+mapfile -t docker_args < "$DOCKER_LOG"
+assert_command_tail opencode --standalone --prompt serve
 
 reset_docker_artifacts
 rm -f "$TOOL_STAGE_CHECK"
@@ -748,7 +814,7 @@ assert_line "  Stop and remove: opencode-container --workspace $WORKSPACE --web-
 credential_lines=()
 mapfile -t credential_lines < "$credentials_file"
 [[ ${#credential_lines[@]} -eq 2 ]] || fail "credentials file has unexpected line count"
-[[ "${credential_lines[0]}" =~ ^OPENCODE_SERVER_USERNAME=(opencode-[0-9a-f]{16})$ ]] || fail "invalid generated username"
+[[ "${credential_lines[0]}" == OPENCODE_SERVER_USERNAME=opencode ]] || fail "invalid V2 username"
 [[ "${credential_lines[1]}" =~ ^OPENCODE_SERVER_PASSWORD=([0-9a-f]{64})$ ]] || fail "invalid generated password"
 valid_credentials="$(<"$credentials_file")"
 assert_no_temporary_web_files
@@ -1056,32 +1122,31 @@ v2_workspace_hash="$workspace_hash"
 v2_container_name="opencode-web-workspace-${v2_workspace_hash}-4703"
 v2_network_name="${v2_container_name}-network"
 v2_credentials_file="$CONTAINER_HOME/web-server/${v2_container_name}.credentials"
-assert_arg_pair --env OPENCODE_WEB_VARIANT=stable
 assert_arg_pair --publish "127.0.0.1:4703:4703"
 assert_arg_pair --name "$v2_container_name"
 assert_command_tail /tmp/opencode-web-entrypoint 4703
 assert_line "  Stop and remove: opencode2-container --workspace $WORKSPACE --web-server stop --web-port 4703" "$OUTPUT"
 assert_line "  Basic Auth credentials: $v2_credentials_file" "$OUTPUT"
-grep -Fq -- "http://127.0.0.1:4703/global/health" "$CURL_EVENTS" || fail "compatibility alias must use latest OpenCode health endpoint"
-[[ "$(head -n 1 "$v2_credentials_file")" =~ ^OPENCODE_SERVER_USERNAME=opencode-[0-9a-f]{16}$ ]] || fail "compatibility alias must use latest OpenCode credentials"
-[[ "$(stat -c '%s' "$v2_credentials_file")" == "141" ]] || fail "compatibility alias credentials file has unexpected size"
+grep -Fq -- "http://127.0.0.1:4703/api/info" "$CURL_EVENTS" || fail "compatibility alias must use the V2 info endpoint"
+[[ "$(head -n 1 "$v2_credentials_file")" == OPENCODE_SERVER_USERNAME=opencode ]] || fail "compatibility alias must use V2 credentials"
+[[ "$(stat -c '%s' "$v2_credentials_file")" == "124" ]] || fail "compatibility alias credentials file has unexpected size"
 run_launcher_with "$V2_CONTAINER_LAUNCHER" --web-server stop --web-port 4703 > "$OUTPUT"
 assert_event "rm -f $DOCKER_RUN_ID"
 assert_event "network rm $DOCKER_NETWORK_ID"
 
 reset_sbx_artifacts
 run_launcher_with "$V2_SANDBOX_LAUNCHER" --workspace "$WORKSPACE" -- --continue > "$OUTPUT"
-assert_line "create --name opencode-workspace --memory 8g --cpus 4 --template localhost/opencode-containment:latest opencode $WORKSPACE" "$SBX_LOG"
+assert_line "create --name opencode-workspace --memory 8g --cpus 4 --template localhost/opencode-containment-sandbox:latest opencode $WORKSPACE" "$SBX_LOG"
 grep -Fq -- "exec -e OPENCODE_PROFILE=native" "$SBX_LOG" || fail "compatibility sandbox alias must export the profile"
-grep -Fq -- "opencode --continue" "$SBX_LOG" || fail "compatibility sandbox alias must execute latest opencode"
+grep -Fq -- "opencode --standalone --continue" "$SBX_LOG" || fail "compatibility sandbox alias must execute V2 in standalone mode"
 
 reset_sbx_artifacts
 JEV_PLUGIN_TEST_DIR="$TEST_DIR/jev-plugin"
 mkdir -p "$JEV_PLUGIN_TEST_DIR"
 OPENCODE_SANDBOX_NAME="opencode-jev-test" OPENCODE_JEV_PLUGIN_DIR="$JEV_PLUGIN_TEST_DIR" TYPESAFE_API_KEY="typesafe-test-key"   run_launcher_with "$V2_SANDBOX_LAUNCHER" --workspace "$WORKSPACE" -- --continue > "$OUTPUT"
-assert_line "create --name opencode-jev-test --memory 8g --cpus 4 --template localhost/opencode-containment:latest opencode $WORKSPACE $JEV_PLUGIN_TEST_DIR:ro" "$SBX_LOG"
+assert_line "create --name opencode-jev-test --memory 8g --cpus 4 --template localhost/opencode-containment-sandbox:latest opencode $WORKSPACE $JEV_PLUGIN_TEST_DIR:ro" "$SBX_LOG"
 grep -Fq -- "-e TYPESAFE_API_KEY=typesafe-test-key" "$SBX_LOG" || fail "sandbox must pass the TypeSafe API key"
-grep -Fq -- "opencode --continue" "$SBX_LOG" || fail "sandbox Jev test must execute latest opencode"
+grep -Fq -- "opencode --standalone --continue" "$SBX_LOG" || fail "sandbox Jev test must execute V2 in standalone mode"
 rm -rf "$JEV_PLUGIN_TEST_DIR"
 
 reset_docker_artifacts
@@ -1132,5 +1197,122 @@ set -e
 assert_line "Web server logs for '$container_id':" "$OUTPUT"
 assert_event "rm -f $container_id"
 assert_event "network rm $DOCKER_NETWORK_ID"
+
+reset_sbx_artifacts
+run_launcher_with "$SANDBOX_LAUNCHER" > "$OUTPUT"
+grep -Fq -- "opencode --standalone" "$SBX_LOG" || fail "primary sandbox launcher must use a private V2 server"
+assert_line "opencode --version" "$SBX_LOG"
+
+reset_sbx_artifacts
+if OPENCODE_TEST_VERSION=1.19.3 run_launcher_with "$SANDBOX_LAUNCHER" -- --continue > "$OUTPUT" 2>&1; then
+    fail "reused V1 sandbox must be rejected"
+fi
+grep -Fq -- "OpenCode V2 is required" "$OUTPUT" || fail "stale sandbox error must explain the required runtime"
+[[ -f "$SBX_STATE" ]] || fail "V1 sandbox state must be preserved"
+grep -Fq -- "opencode --standalone --continue" "$SBX_LOG" && fail "V1 sandbox must not launch the TUI"
+
+reset_sbx_artifacts
+OPENCODE_SYNC_HOST_AUTH=1 run_launcher_with "$SANDBOX_LAUNCHER" -- --continue > "$OUTPUT"
+assert_line "opencode auth export" "$SBX_LOG"
+auth_mirror="$TEST_DIR/sandbox-home/auth/credentials.json"
+assert_line "opencode auth import --standalone $auth_mirror" "$SBX_LOG"
+[[ "$(stat -c '%a' "$auth_mirror")" == 600 ]] || fail "V2 credential export must be private"
+[[ "$(stat -c '%a' "$(dirname "$auth_mirror")")" == 700 ]] || fail "V2 credential directory must be private"
+[[ "$(<"$auth_mirror")" == '[]' ]] || fail "sandbox must store the V2 credential export"
+
+reset_sbx_artifacts
+if OPENCODE_SYNC_HOST_AUTH=1 OPENCODE_TEST_VERSION=1.19.3 run_launcher_with "$SANDBOX_LAUNCHER" > "$OUTPUT" 2>&1; then
+    fail "V1 host credentials must not be exported"
+fi
+[[ ! -e "$SBX_STATE" ]] || fail "V1 host CLI must be rejected before sandbox creation"
+
+reset_sbx_artifacts
+linked_sandbox="$INSTALLED_BIN/opencode-sandbox"
+ln -s "$SANDBOX_LAUNCHER" "$linked_sandbox"
+run_launcher_with "$linked_sandbox" -- --server http://example.test:4096 > "$OUTPUT"
+grep -Fq -- "opencode --server http://example.test:4096" "$SBX_LOG" || fail "installed sandbox launcher must preserve explicit server connections"
+grep -Fq -- "opencode --server http://example.test:4096 --standalone" "$SBX_LOG" && fail "explicit server must not be combined with standalone"
+
+printf '%s\n' "${valid_credentials/OPENCODE_SERVER_USERNAME=opencode/OPENCODE_SERVER_USERNAME=opencode-0123456789abcdef}" > "$credentials_file"
+chmod 600 "$credentials_file"
+assert_invalid_credentials "Error: V2 requires OPENCODE_SERVER_USERNAME=opencode. Stop the old server, then update that line in $credentials_file, preserving the password and mode 0600."
+
+# Isolate build tests from personal version pins and executable local hooks.
+BUILD_FIXTURE="$TEST_DIR/build"
+mkdir -p "$BUILD_FIXTURE/scripts"
+cp "$SCRIPT_DIR/scripts/build-image.sh" "$BUILD_FIXTURE/scripts/build-image.sh"
+CURL_RELEASE_METADATA='{"version": "2.1.2"}'
+
+run_build() {
+    PATH="$FAKE_BIN:$PATH" DOCKER_LOG="$DOCKER_LOG" DOCKER_EVENTS="$DOCKER_EVENTS" \
+        CURL_EVENTS="$CURL_EVENTS" CURL_RELEASE_METADATA="$CURL_RELEASE_METADATA" \
+        CURL_RELEASE_FAIL="${CURL_RELEASE_FAIL:-0}" \
+        bash "$BUILD_FIXTURE/scripts/build-image.sh"
+}
+
+for invalid_version in 1.19.3 3.0.0 2 2.1.2-beta.1 v2.1.2 '2.1.2;exit'; do
+    reset_docker_artifacts
+    if OPENCODE_VERSION="$invalid_version" run_build > "$OUTPUT" 2>&1; then
+        fail "build helper must reject invalid version: $invalid_version"
+    fi
+    [[ ! -e "$DOCKER_LOG" && ! -e "$CURL_EVENTS" ]] || fail "invalid version must fail before Docker or release lookup"
+    assert_line "Error: OPENCODE_VERSION must resolve to a stable V2 release (2.x.y); use latest or an explicit version." "$OUTPUT"
+done
+
+reset_docker_artifacts
+OPENCODE_VERSION=2.1.1 CURL_RELEASE_FAIL=1 run_build > "$OUTPUT"
+mapfile -t docker_args < "$DOCKER_LOG"
+assert_arg_pair --build-arg OPENCODE_VERSION=2.1.1
+assert_arg_pair --target container
+[[ ! -e "$CURL_EVENTS" ]] || fail "an explicit pin must not require a release lookup"
+
+reset_docker_artifacts
+(unset OPENCODE_VERSION; run_build) > "$OUTPUT"
+mapfile -t docker_args < "$DOCKER_LOG"
+assert_arg_pair --build-arg OPENCODE_VERSION=2.1.2
+assert_arg_pair --target container
+assert_line "Building OpenCode V2.1.2 (container image)." "$OUTPUT"
+grep -Fq -- '--connect-timeout 10 --max-time 60 https://opencode.ai/update/api/latest/cli/npm' "$CURL_EVENTS" || fail "latest lookup must use the official API with bounded timeouts"
+
+reset_docker_artifacts
+OPENCODE_VERSION=latest OPENCODE_BUILD_TARGET=sandbox OPENCODE_BUILD_NO_CACHE=1 run_build > "$OUTPUT"
+mapfile -t docker_args < "$DOCKER_LOG"
+assert_arg_pair --build-arg OPENCODE_VERSION=2.1.2
+assert_arg_pair --target sandbox
+assert_line --no-cache "$DOCKER_LOG"
+assert_line --pull "$DOCKER_LOG"
+
+reset_docker_artifacts
+OPENCODE_VERSION='' CURL_RELEASE_METADATA=$'{\n  "version" : "2.10.12"\n}' run_build > "$OUTPUT"
+mapfile -t docker_args < "$DOCKER_LOG"
+assert_arg_pair --build-arg OPENCODE_VERSION=2.10.12
+
+for invalid_metadata in '' 'not json' '{}' '{"version":""}' '{"version":"1.19.3"}' '{"version":"3.0.0"}' '{"version":"2.1.2-beta.1"}'; do
+    reset_docker_artifacts
+    if OPENCODE_VERSION=latest CURL_RELEASE_METADATA="$invalid_metadata" run_build > "$OUTPUT" 2>&1; then
+        fail "build helper must reject invalid release metadata"
+    fi
+    [[ ! -e "$DOCKER_LOG" ]] || fail "invalid release metadata must fail before Docker"
+done
+
+reset_docker_artifacts
+if OPENCODE_VERSION=latest CURL_RELEASE_FAIL=1 run_build > "$OUTPUT" 2>&1; then
+    fail "release lookup failure must fail the build, not silently select an old release"
+fi
+[[ ! -e "$DOCKER_LOG" ]] || fail "release lookup failure must fail before Docker"
+assert_line "Error: Could not resolve the latest OpenCode V2 release. Retry or pin OPENCODE_VERSION=2.x.y." "$OUTPUT"
+
+reset_docker_artifacts
+if OPENCODE_VERSION=latest OPENCODE_BUILD_TARGET=invalid run_build > "$OUTPUT" 2>&1; then
+    fail "invalid build target must be rejected"
+fi
+[[ ! -e "$DOCKER_LOG" && ! -e "$CURL_EVENTS" ]] || fail "invalid build target must fail before Docker or release lookup"
+
+reset_docker_artifacts
+printf 'export OPENCODE_VERSION=2.1.1\n' > "$BUILD_FIXTURE/opencode-local.sh"
+OPENCODE_VERSION=latest CURL_RELEASE_FAIL=1 run_build > "$OUTPUT"
+mapfile -t docker_args < "$DOCKER_LOG"
+assert_arg_pair --build-arg OPENCODE_VERSION=2.1.1
+[[ ! -e "$CURL_EVENTS" ]] || fail "a local hook pin must bypass the release lookup"
 
 echo "Launcher tests passed."

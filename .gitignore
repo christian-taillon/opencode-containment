@@ -13,6 +13,7 @@ opencode.json
 demo/logs/*.log
 demo/repo/.env
 .ruff_cache/
+/.opencode/work/
 
 # Development artifacts
 PLAN.md
