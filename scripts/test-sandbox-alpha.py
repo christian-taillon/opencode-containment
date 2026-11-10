@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """Focused standalone alpha tests; no runtime, credentials, or inference."""
+
 import argparse
 import importlib.util
 import json
@@ -10,28 +11,42 @@ import tempfile
 import unittest
 from unittest.mock import Mock, patch
 
-spec = importlib.util.spec_from_file_location("alpha", Path(__file__).with_name("sandbox_alpha.py"))
+spec = importlib.util.spec_from_file_location(
+    "alpha", Path(__file__).with_name("sandbox_alpha.py")
+)
 alpha = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(alpha)
 
 
 class AlphaTests(unittest.TestCase):
     def setUp(self):
-        Path("/tmp/opencode").mkdir(exist_ok=True)
-        self.temp = tempfile.TemporaryDirectory(dir="/tmp/opencode")
+        self.addCleanup(os.umask, os.umask(0o077))
+        test_root = Path(os.environ.get("TMPDIR", "/tmp/opencode")).resolve()
+        test_root.mkdir(exist_ok=True)
+        self.temp = tempfile.TemporaryDirectory(dir=test_root)
         self.addCleanup(self.temp.cleanup)
         self.root = Path(self.temp.name)
         self.workspace = self.root / "workspace"
         self.workspace.mkdir()
         self.global_path = self.root / "config.json"
-        self.args = argparse.Namespace(no_project_config=False, cpus=None, memory=None,
-                                       sbx=None, allow_network=[], env=[])
+        self.args = argparse.Namespace(
+            no_project_config=False,
+            cpus=None,
+            memory=None,
+            sbx=None,
+            allow_network=[],
+            env=[],
+        )
 
     def project(self, settings):
-        (self.workspace / ".opencode-containment.json").write_text(json.dumps({"sandbox": settings}))
+        (self.workspace / ".opencode-containment.json").write_text(
+            json.dumps({"sandbox": settings})
+        )
 
     def test_default_global_project_cli_precedence(self):
-        self.global_path.write_text(json.dumps({"sandbox": {"cpus": 4, "memory": "8g"}}))
+        self.global_path.write_text(
+            json.dumps({"sandbox": {"cpus": 4, "memory": "8g"}})
+        )
         self.project({"cpus": 2, "memory": "2g"})
         self.args.cpus = 3
         config, sources = alpha.settings(self.global_path, self.workspace, self.args)
@@ -39,9 +54,12 @@ class AlphaTests(unittest.TestCase):
         self.assertEqual(len(sources), 3)
 
     def test_project_cannot_authorize_host_access(self):
-        for settings in ({"network_allow": ["host.docker.internal:11434"]},
-                         {"environment": {"GH_TOKEN": "fake"}}, {"sbx": "/evil"},
-                         {"template": "evil"}):
+        for settings in (
+            {"network_allow": ["host.docker.internal:11434"]},
+            {"environment": {"GH_TOKEN": "fake"}},
+            {"sbx": "/evil"},
+            {"template": "evil"},
+        ):
             with self.subTest(settings=settings), self.assertRaises(ValueError):
                 self.project(settings)
                 alpha.settings(self.global_path, self.workspace, self.args)
@@ -51,32 +69,59 @@ class AlphaTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             alpha.settings(self.global_path, self.workspace, self.args)
         self.args.cpus, self.args.memory = 8, "8g"
-        self.assertEqual(alpha.settings(self.global_path, self.workspace, self.args)[0]["cpus"], 8)
+        self.assertEqual(
+            alpha.settings(self.global_path, self.workspace, self.args)[0]["cpus"], 8
+        )
 
     def test_no_project_config_bypasses_bad_project(self):
         self.project({"sbx": "/evil"})
         self.args.no_project_config = True
-        self.assertEqual(alpha.settings(self.global_path, self.workspace, self.args)[0]["cpus"], 2)
+        self.assertEqual(
+            alpha.settings(self.global_path, self.workspace, self.args)[0]["cpus"], 2
+        )
 
     def test_environment_explicit_only_and_reserved_names(self):
         with patch.dict(os.environ, {"GH_TOKEN": "test-only"}):
-            self.assertEqual(alpha.settings(self.global_path, self.workspace, self.args)[0]["environment"], {})
+            self.assertEqual(
+                alpha.settings(self.global_path, self.workspace, self.args)[0][
+                    "environment"
+                ],
+                {},
+            )
             self.args.env = ["GH_TOKEN"]
-            self.assertEqual(alpha.settings(self.global_path, self.workspace, self.args)[0]["environment"], {"GH_TOKEN": "test-only"})
-        for key in ("SSH_AUTH_SOCK", "HOME", "BASH_ENV", "OPENCODE_CONFIG", "MCP_GATEWAY_URL", "LD_PRELOAD"):
+            self.assertEqual(
+                alpha.settings(self.global_path, self.workspace, self.args)[0][
+                    "environment"
+                ],
+                {"GH_TOKEN": "test-only"},
+            )
+        for key in (
+            "SSH_AUTH_SOCK",
+            "HOME",
+            "BASH_ENV",
+            "OPENCODE_CONFIG",
+            "MCP_GATEWAY_URL",
+            "LD_PRELOAD",
+        ):
             with self.subTest(key=key), self.assertRaises(ValueError):
                 alpha.validate({"environment": {key: "bad"}})
 
     def test_bad_types_and_network_patterns_rejected(self):
-        for settings in ({"cpus": True}, {"memory": "1m"}, {"network_allow": ["**"]},
-                         {"network_allow": ["localhost:99999"]}, {"environment": {"KEY": "line\nbreak"}},
-                         {"template": None}, {"unknown": True}):
+        for settings in (
+            {"cpus": True},
+            {"memory": "1m"},
+            {"network_allow": ["**"]},
+            {"network_allow": ["localhost:99999"]},
+            {"environment": {"KEY": "line\nbreak"}},
+            {"template": None},
+            {"unknown": True},
+        ):
             with self.subTest(settings=settings), self.assertRaises(ValueError):
                 alpha.validate(settings)
 
     def test_json_symlinks_and_unknown_root_rejected(self):
         source = self.root / "source.json"
-        source.write_text('{}')
+        source.write_text("{}")
         self.global_path.symlink_to(source)
         with self.assertRaises(ValueError):
             alpha.read_json(self.global_path)
@@ -96,17 +141,33 @@ class AlphaTests(unittest.TestCase):
                 alpha.workspace_path(sensitive)
 
     def test_runtime_strips_credentials_agent_and_injection_vars(self):
-        with patch.dict(os.environ, {"GH_TOKEN": "fake", "SSH_AUTH_SOCK": "/fake", "DOCKER_HOST": "bad", "SBX_CLOUD": "1"}):
+        with patch.dict(
+            os.environ,
+            {
+                "GH_TOKEN": "fake",
+                "SSH_AUTH_SOCK": "/fake",
+                "DOCKER_HOST": "bad",
+                "SBX_CLOUD": "1",
+            },
+        ):
             runtime = alpha.Runtime("/usr/bin/true")
-        self.assertFalse(set(runtime.environment) & {"GH_TOKEN", "SSH_AUTH_SOCK", "DOCKER_HOST", "SBX_CLOUD"})
+        self.assertFalse(
+            set(runtime.environment)
+            & {"GH_TOKEN", "SSH_AUTH_SOCK", "DOCKER_HOST", "SBX_CLOUD"}
+        )
 
     def test_replacement_or_workspace_change_refuses_ownership(self):
         runtime = alpha.Runtime("/usr/bin/true")
         record = {"name": "alpha", "id": "original", "workspace": str(self.workspace)}
-        runtime.find = Mock(return_value={"id": "original", "workspaces": [str(self.workspace)]})
+        runtime.find = Mock(
+            return_value={"id": "original", "workspaces": [str(self.workspace)]}
+        )
         runtime.owned(record)
-        for found in (None, {"id": "replacement", "workspaces": [str(self.workspace)]},
-                      {"id": "original", "workspaces": ["/"]}):
+        for found in (
+            None,
+            {"id": "replacement", "workspaces": [str(self.workspace)]},
+            {"id": "original", "workspaces": ["/"]},
+        ):
             runtime.find.return_value = found
             with self.assertRaises(ValueError):
                 runtime.owned(record)
@@ -115,10 +176,16 @@ class AlphaTests(unittest.TestCase):
         runtime = Mock(executable="/usr/bin/true", environment={})
         record = {"name": "alpha", "workspace": str(self.workspace)}
         process = Mock(returncode=-9)
-        process.wait.side_effect = [KeyboardInterrupt, subprocess.TimeoutExpired("exec", 2), 0]
+        process.wait.side_effect = [
+            KeyboardInterrupt,
+            subprocess.TimeoutExpired("exec", 2),
+            0,
+        ]
         process.poll.return_value = None
         with patch.object(alpha.subprocess, "Popen", return_value=process):
-            self.assertEqual(alpha.run_client(runtime, record, ["--standalone"], True), 130)
+            self.assertEqual(
+                alpha.run_client(runtime, record, ["--standalone"], True), 130
+            )
         process.terminate.assert_called_once()
         process.kill.assert_called_once()
         runtime.call.assert_called_once_with("stop", "alpha")
@@ -132,7 +199,9 @@ class AlphaTests(unittest.TestCase):
                 process.wait.return_value = 0
                 process.poll.return_value = 0
                 with patch.object(alpha.subprocess, "Popen", return_value=process):
-                    self.assertEqual(alpha.run_client(runtime, record, [], keep_running), 0)
+                    self.assertEqual(
+                        alpha.run_client(runtime, record, [], keep_running), 0
+                    )
                 self.assertEqual(runtime.call.call_count, 0 if keep_running else 1)
 
     def test_client_launch_failure_stops_even_with_keep_running(self):
@@ -146,7 +215,8 @@ class AlphaTests(unittest.TestCase):
     def test_cached_binary_integrity_rejected(self):
         pin = alpha.read_json(alpha.ROOT / "config/opencode2-pin.json")
         target = self.root / "clients" / pin["version"] / "opencode2"
-        target.parent.mkdir(parents=True)
+        target.parent.parent.mkdir(mode=0o700)
+        target.parent.mkdir(mode=0o700)
         target.write_bytes(b"modified")
         target.with_suffix(".json").write_text('{"sha256":"incorrect"}')
         with self.assertRaisesRegex(ValueError, "integrity"):
@@ -154,7 +224,9 @@ class AlphaTests(unittest.TestCase):
 
     def test_effective_config_redacts_environment_values(self):
         config = {**alpha.DEFAULTS, "environment": {"TEST_KEY": "do-not-print"}}
-        visible = alpha.visible_config(config, ["defaults"], self.global_path, self.workspace)
+        visible = alpha.visible_config(
+            config, ["defaults"], self.global_path, self.workspace
+        )
         self.assertNotIn("do-not-print", json.dumps(visible))
         self.assertEqual(visible["sandbox"]["environment"], ["TEST_KEY"])
 
@@ -165,7 +237,10 @@ class AlphaTests(unittest.TestCase):
         process = Mock(returncode=0)
         process.wait.return_value = 0
         process.poll.return_value = 0
-        with patch.object(alpha.subprocess, "Popen", return_value=process), patch.object(alpha.signal, "signal") as signals:
+        with (
+            patch.object(alpha.subprocess, "Popen", return_value=process),
+            patch.object(alpha.signal, "signal") as signals,
+        ):
             with self.assertRaisesRegex(RuntimeError, "stop failed"):
                 alpha.run_client(runtime, record, [], False)
         self.assertEqual(signals.call_count, 6)
@@ -175,14 +250,26 @@ class AlphaTests(unittest.TestCase):
     def test_cleanup_preflight_does_not_block_on_sharing_or_diagnostics(self):
         runtime = Mock(executable="/usr/bin/true")
         runtime.call.return_value = "sbx version: v0.46.0 fixture"
+
         def reply(*args):
             if args == ("daemon", "status", "--json"):
                 return {"status": "running", "socket": "/test/socket"}
             if args == ("diagnose", "--json"):
-                return {"checks": [{"name": "Authentication", "status": "fail", "message": "expired"}]}
+                return {
+                    "checks": [
+                        {
+                            "name": "Authentication",
+                            "status": "fail",
+                            "message": "expired",
+                        }
+                    ]
+                }
             raise AssertionError(args)
+
         runtime.json.side_effect = reply
-        self.assertEqual(alpha.preflight(runtime, False, False)["socket"], "/test/socket")
+        self.assertEqual(
+            alpha.preflight(runtime, False, False)["socket"], "/test/socket"
+        )
         with self.assertRaisesRegex(ValueError, "expired"):
             alpha.preflight(runtime, False)
 
